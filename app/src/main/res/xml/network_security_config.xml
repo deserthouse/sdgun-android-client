@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 论坛图床 picapp.sdgun.net 走 http 明文（https 页面内混载），精确放行 sdgun 域 -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">sdgun.com.cn</domain>
+        <domain includeSubdomains="true">sdgun.net</domain>
+    </domain-config>
+</network-security-config>
