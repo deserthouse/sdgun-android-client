@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SDGun 社区</string>
+    <string name="disclaimer">本应用为非官方第三方客户端，仅提供对 bbs.sdgun.com.cn 触屏版的封装访问，不内置任何论坛资源，与 SDGun 官方无关联。账号操作均在官方页面完成。</string>
+</resources>
