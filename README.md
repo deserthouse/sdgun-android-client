@@ -14,7 +14,7 @@
 
 ## 安装
 
-Android 12+。从 [Releases](../../releases) 下载 APK 安装。
+Android 12+。从 [Releases](releases) 下载 APK 安装。
 
 签名证书 SHA-256：`614c0c24ae75e9f5417720ae1d8e092d36c172e587904ba031bb4287e642f8fb`
 
