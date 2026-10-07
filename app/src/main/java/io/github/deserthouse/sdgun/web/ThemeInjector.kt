@@ -84,9 +84,31 @@ object ThemeInjector {
             "   var src = imgs[j].src; imgs[j].src = 'about:blank';" +
             "   imgs[j].src = src + (src.indexOf('?') > -1 ? '&' : '?') + 'r=' + Date.now(); } } };" +
             " if (!window.SDG_IMG_RETRY_BOUND) { document.addEventListener('click', window.SDG_IMG_RETRY, true); window.SDG_IMG_RETRY_BOUND = true; }" +
+            " window.SDG_CHIPS = function() {" +
+            "  var groups = document.querySelectorAll('div[data-byginto]');" +
+            "  if (groups.length === 0 || document.getElementById('sdg-chips')) return;" +
+            "  var bar = document.createElement('div'); bar.id = 'sdg-chips';" +
+            "  bar.style.cssText = 'position:sticky;top:0;z-index:9998;display:flex;gap:8px;overflow-x:auto;padding:8px 12px;background:var(--sdg-surface);border-bottom:1px solid var(--sdg-outline-variant);scrollbar-width:none;';" +
+            "  var mk = function(txt, fn) { var c = document.createElement('span');" +
+            "   c.textContent = txt; c.style.cssText = 'flex:0 0 auto;padding:6px 14px;border-radius:999px;background:var(--sdg-surface-variant);color:var(--sdg-on-surface);font-size:14px;white-space:nowrap;cursor:pointer;';" +
+            "   c.onclick = fn; bar.appendChild(c); };" +
+            "  mk('最新', function(){ location.href = 'forum.php?mod=guide&view=newthread&mobile=2'; });" +
+            "  groups.forEach(function(g) { var h = g.querySelector('h2 a'); if (h) mk(h.textContent.trim(), function(){ g.scrollIntoView({behavior:'smooth'}); }); });" +
+            "  var hdr = document.getElementById('byg_header');" +
+            "  if (hdr && hdr.parentElement) hdr.parentElement.insertBefore(bar, hdr.nextSibling);" +
+            "  document.body.classList.add('sdg-home');" +
+            "  window.SDG_IMG_PH = 'data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22><rect width=%2248%22 height=%2248%22 rx=%2210%22 fill=%22%235a5d68%22 fill-opacity=%220.45%22/></svg>';" +
+            "  window.SDG_IMG_FALLBACK = function(e) { var im = e.target;" +
+            "   if (!im || im.tagName !== 'IMG' || im.dataset.sdgPh || !im.closest('.bm')) return;" +
+            "   im.dataset.sdgPh = '1'; im.src = window.SDG_IMG_PH; };" +
+            "  if (!window.SDG_IMG_FALLBACK_BOUND) { document.addEventListener('error', window.SDG_IMG_FALLBACK, true); window.SDG_IMG_FALLBACK_BOUND = true; }" +
+            "  var bi = document.querySelectorAll('.bm img');" +
+            "  for (var k = 0; k < bi.length; k++) if (bi[k].complete && bi[k].naturalWidth === 0) { bi[k].dataset.sdgPh = '1'; bi[k].src = window.SDG_IMG_PH; }" +
+            " };" +
             " window.SDG_APPLY = function(varsCss, enabled) {" +
-            "  if (!enabled) { ['sdg-vars','sdg-rules','sdg-hide'].forEach(function(id){" +
+            "  if (!enabled) { ['sdg-vars','sdg-rules','sdg-hide','sdg-chips'].forEach(function(id){" +
             "   var el = document.getElementById(id); if (el && el.parentNode) el.parentNode.removeChild(el); });" +
+            "   document.body.classList.remove('sdg-home');" +
             "   return 'REMOVED'; }" +
             "  if (document.querySelectorAll(window.SDG_ANCHORS).length === 0) return 'SKIP';" +
             "  window.SDG_ENSURE('sdg-vars', varsCss);" +
@@ -100,6 +122,30 @@ object ThemeInjector {
             "   if (bar) { bar.style.background = 'var(--sdg-surface)';" +
             "    bar.style.borderTop = '1px solid var(--sdg-outline-variant)';" +
             "    bar.style.backdropFilter = 'none'; } }" +
+            "  if (document.querySelectorAll('div[data-byginto]').length > 0) window.SDG_CHIPS();" +
+            "  if (location.href.indexOf('mod=viewthread') > -1) { var fl = document.querySelectorAll('.postlist .plc:not(.plc_xin)');" +
+            "   if (fl.length > 1) fl[0].classList.add('sdg-op'); }" +
+            // 原生栏标题取页面自身 DOM（站方 <title> 是"品牌+板块+标题+SEO 串"的拼接体，读起来糊成一团）
+            "  var ttl = '';" +
+            "  if (location.href.indexOf('mod=viewthread') > -1) {" +
+            "   var h2 = document.querySelector('.postlist h2');" +
+            "   if (h2) { ttl = h2.textContent.trim();" +
+            "    if (ttl.charAt(0) === '[') { var cl = ttl.indexOf(']'); if (cl > 0) ttl = ttl.slice(cl + 1).trim(); } }" +
+            "  } else if (location.href.indexOf('mod=forumdisplay') > -1) {" +
+            "   var hf = document.querySelector('.header_font'); if (hf) ttl = hf.textContent.trim();" +
+            "  }" +
+            "  if (ttl) {" +
+            // 站方脚本会在加载后回写 <title>，用观察器守住我们的干净标题（相等判断防自激循环）
+            "   window.SDG_TITLE_TARGET = ttl;" +
+            "   var tEl = document.querySelector('title');" +
+            "   if (tEl && !window.SDG_TITLE_OBS) {" +
+            "    window.SDG_TITLE_OBS = new MutationObserver(function() {" +
+            "     if (window.SDG_TITLE_TARGET && document.title !== window.SDG_TITLE_TARGET)" +
+            "      document.title = window.SDG_TITLE_TARGET; });" +
+            "    window.SDG_TITLE_OBS.observe(tEl, {childList: true, characterData: true, subtree: true});" +
+            "   }" +
+            "   if (document.title !== ttl) document.title = ttl;" +
+            "  }" +
             "  return 'OK'; };" +
             "})()"
 

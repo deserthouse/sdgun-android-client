@@ -33,6 +33,11 @@ class WebState {
     var currentUrl by mutableStateOf(UrlRules.HOME)
         internal set
 
+    /** 用户最近一次点击的底栏 tab（0=首页/1=消息/2=我的）。
+     *  未登录进消息/我的会被站方 302 到 member.php 登录页，URL 特征全失——
+     *  高亮回退依据这个意图值（F6），点 tab 时更新，不随导航失效。 */
+    var intendedTab by mutableStateOf(0)
+
     /** 待处理外链（UI 层弹对话框），null=无 */
     var externalLink by mutableStateOf<String?>(null)
 
@@ -76,6 +81,21 @@ internal fun humanizeError(raw: String, httpStatus: Int? = null): String {
         "ERR_NAME_NOT_RESOLVED" in raw -> "域名解析失败"
         else -> "页面加载失败"
     }
+}
+
+/** 空壳探测（批次 A，对齐扩展 popup 口径）：论坛首页 .sub_forum 骨架存在但一条板块链接都没有
+ *  = 服务器 200 却只回了骨架。收窄到 forumlist 页判定，板块/帖子页不做（防子版块区误伤）。 */
+internal const val SHELL_PROBE_JS =
+    "(function(){if(location.href.indexOf('forum.php')<0)return 'n/a';" +
+        "var sf=document.querySelector('.sub_forum');" +
+        "if(!sf)return 'n/a';" +
+        "return sf.querySelector('a')?'ok':'empty'})()"
+
+/** 解析探测回值 → 是否空壳。evaluateJavascript 回 JSON 字符串（带引号）或 "null"。
+ *  只有明确的 "empty" 判空壳；n/a / ok / 解析失败一律不算（漏报好过误报）。 */
+internal fun shellVerdict(jsonResult: String?): Boolean = when (jsonResult?.trim()) {
+    "\"empty\"" -> true
+    else -> false
 }
 
 /**
@@ -153,6 +173,32 @@ fun createForumWebView(
                 state.title = view.title.orEmpty()
                 if (state.webThemeEnabled && state.pageThemeJs.isNotEmpty()) {
                     view.evaluateJavascript(state.pageThemeJs, null)
+                    // 注入脚本会把 <title> 换成页面自身的干净名称（站方标题是"品牌+板块+标题+SEO串"的拼接体）。
+                    // 观察器的回写不触发 onReceivedTitle，故此处主动回读一次拿最终值。
+                    view.postDelayed({
+                        runCatching {
+                            view.evaluateJavascript("document.title") { result ->
+                                val t = runCatching {
+                                    org.json.JSONTokener(result).nextValue() as? String
+                                }.getOrNull()
+                                if (!t.isNullOrBlank()) state.title = t
+                            }
+                        }
+                    }, 1200)
+                }
+                // 空壳探测（批次 A）：服务器 200 但只回骨架（网络层无错误、覆盖层不触发），
+                // 延时到首页骨架渲染完再判；复用错误覆盖层给重试入口。
+                if (url != null && state.loadError == null) {
+                    view.postDelayed({
+                        runCatching {
+                            view.evaluateJavascript(SHELL_PROBE_JS) { r ->
+                                if (shellVerdict(r) && state.loadError == null) {
+                                    state.loadError = "服务器只回了个空壳，内容没跟上"
+                                    state.loadErrorRaw = "HTTP 200 · empty shell (.sub_forum without links)"
+                                }
+                            }
+                        }
+                    }, 2500)
                 }
                 (view.parent as? androidx.swiperefreshlayout.widget.SwipeRefreshLayout)?.isRefreshing = false
             }
