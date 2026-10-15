@@ -26,6 +26,7 @@ import androidx.navigation.compose.rememberNavController
 import io.github.deserthouse.sdgun.data.AppPrefs
 import io.github.deserthouse.sdgun.ui.AppBottomBar
 import io.github.deserthouse.sdgun.ui.HomeScreen
+import io.github.deserthouse.sdgun.ui.activeTab
 import io.github.deserthouse.sdgun.ui.tabUrl
 import io.github.deserthouse.sdgun.ui.SettingsScreen
 import io.github.deserthouse.sdgun.ui.theme.SDGunTheme
@@ -69,6 +70,10 @@ class MainActivity : ComponentActivity() {
             }
             val filter = IntentFilter("io.github.deserthouse.sdgun.JS")
             if (Build.VERSION.SDK_INT >= 33) {
+                // A-03 收窄实验结论（2026-10-15 实测）：RECEIVER_NOT_EXPORTED 连 adb shell
+                // 广播一并拦截，自动化探针（tests/jsprobe.py）整体失效。保持 EXPORTED——
+                // 威胁面=与 debug 构建同设备的第三方 app（release 不注册本 receiver），
+                // 实际风险极小；正式收窄走"开发者选项开关"方案，见 android_work_plan。
                 registerReceiver(debugJsReceiver, filter, Context.RECEIVER_EXPORTED)
             } else {
                 @Suppress("UnspecifiedRegisterReceiverFlag")
@@ -103,6 +108,9 @@ class MainActivity : ComponentActivity() {
         val url = intent.data?.toString() ?: return false
         return if (UrlRules.classify(url) is UrlRules.Verdict.Internal) {
             webView.loadUrl(UrlRules.normalizeInternal(url))
+            // A-08：深链可能发生在设置页路由上——通知 UI 把路由切回 home，
+            // 否则目标内容已在 WebView 里加载而用户还看着设置页
+            state.deepLinkTick++
             true
         } else false
     }
@@ -122,11 +130,35 @@ class MainActivity : ComponentActivity() {
 private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
     val navController = rememberNavController()
 
-    // 发帖传图：系统图片选择器
-    val imagePicker = rememberLauncherForActivityResult(
+    // A-08：所有 tab 入口共用（Home 底栏 + 设置页底栏），先记意图再加载；
+    // 已在该 tab 时重复点击不重载（保留页面内容与表单）
+    fun navigateTab(index: Int) {
+        state.intendedTab = index
+        if (activeTab(state.currentUrl, index) == index) return
+        tabUrl(index)?.let { webView.loadUrl(it) }
+    }
+
+    // A-06：按网页声明的契约选系统选择器——多选契约与任意 MIME 直传
+    val singlePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
-    ) { uri -> state.consumeFileChooserResult(uri) }
-    LaunchedEffect(Unit) { state.requestImagePick = { imagePicker.launch("image/*") } }
+    ) { uri -> state.consumeFileChooserResult(uri?.let { listOf(it) }) }
+    val multiPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetMultipleContents()
+    ) { uris -> state.consumeFileChooserResult(uris.toList()) }
+    LaunchedEffect(Unit) {
+        state.requestImagePick = { req ->
+            if (req.multiple) multiPicker.launch(req.mimeType) else singlePicker.launch(req.mimeType)
+        }
+    }
+
+    // A-08：论坛深链发生在设置页路由时切回 home（WebView 已加载目标内容）
+    LaunchedEffect(state.deepLinkTick) {
+        if (state.deepLinkTick > 0 &&
+            navController.currentBackStackEntry?.destination?.route != "home"
+        ) {
+            navController.popBackStack("home", inclusive = false)
+        }
+    }
 
     // 设置快照同步进 WebState（WebView 回调读取的是这里的最新值）；
     // 主题/注入开关变更时对当前页即时生效（SDG_APPLY 只重发变量层 / 或移除全部节点）
@@ -150,20 +182,27 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                 state = state,
                 webView = webView,
                 onOpenSettings = { navController.navigate("settings") },
+                onNavigateTab = ::navigateTab,
             )
         }
         composable("settings") {
             SettingsScreen(
                 prefs = prefs,
                 onBack = { navController.popBackStack() },
-                onClearLoginState = {
-                    CookieManager.getInstance().removeAllCookies(null)
-                    CookieManager.getInstance().flush()
-                    webView.loadUrl(UrlRules.HOME)
+                // A-04：清除完成（回调）才反馈成功、才回首页——避免带着未删完的
+                // Cookie 发出首页请求（服务器可能按登录态响应，观感"清了又登回"）
+                onClearLoginState = { onDone ->
+                    CookieManager.getInstance().removeAllCookies { _ ->
+                        runCatching {
+                            CookieManager.getInstance().flush()
+                            webView.loadUrl(UrlRules.HOME)
+                        }
+                        onDone()
+                    }
                 },
                 onTab = { i ->
                     navController.popBackStack()
-                    tabUrl(i)?.let { webView.loadUrl(it) }
+                    navigateTab(i)
                 },
             )
         }

@@ -100,20 +100,47 @@ object ThemeInjector {
             "  window.SDG_IMG_PH = 'data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22><rect width=%2248%22 height=%2248%22 rx=%2210%22 fill=%22%235a5d68%22 fill-opacity=%220.45%22/></svg>';" +
             "  window.SDG_IMG_FALLBACK = function(e) { var im = e.target;" +
             "   if (!im || im.tagName !== 'IMG' || im.dataset.sdgPh || !im.closest('.bm')) return;" +
-            "   im.dataset.sdgPh = '1'; im.src = window.SDG_IMG_PH; };" +
+            "   im.dataset.sdgPh = '1'; im.dataset.sdgOrig = im.src; im.src = window.SDG_IMG_PH; };" +
             "  if (!window.SDG_IMG_FALLBACK_BOUND) { document.addEventListener('error', window.SDG_IMG_FALLBACK, true); window.SDG_IMG_FALLBACK_BOUND = true; }" +
             "  var bi = document.querySelectorAll('.bm img');" +
-            "  for (var k = 0; k < bi.length; k++) if (bi[k].complete && bi[k].naturalWidth === 0) { bi[k].dataset.sdgPh = '1'; bi[k].src = window.SDG_IMG_PH; }" +
+            "  for (var k = 0; k < bi.length; k++) if (bi[k].complete && bi[k].naturalWidth === 0) { bi[k].dataset.sdgPh = '1'; bi[k].dataset.sdgOrig = bi[k].src; bi[k].src = window.SDG_IMG_PH; }" +
             " };" +
             " window.SDG_APPLY = function(varsCss, enabled) {" +
-            "  if (!enabled) { ['sdg-vars','sdg-rules','sdg-hide','sdg-chips'].forEach(function(id){" +
-            "   var el = document.getElementById(id); if (el && el.parentNode) el.parentNode.removeChild(el); });" +
+            // A-05：关闭=对称撤销本注入做过的全部修改——style 节点、chips、观察器、
+            // 监听器、sdg 标记类、fastpost 内联覆盖、破图占位、earlyBg 底色。
+            // 只移除本实例持有的引用；站方后续自行改过的值不动。
+            "  if (!enabled) {" +
+            "   ['sdg-vars','sdg-rules','sdg-hide','sdg-chips'].forEach(function(id){" +
+            "    var el = document.getElementById(id); if (el && el.parentNode) el.parentNode.removeChild(el); });" +
             "   document.body.classList.remove('sdg-home');" +
+            "   if (window.SDG_TITLE_OBS) { try { window.SDG_TITLE_OBS.disconnect(); } catch(e){}" +
+            "    window.SDG_TITLE_OBS = null; window.SDG_TITLE_TARGET = ''; }" +
+            "   if (window.SDG_IMG_RETRY) document.removeEventListener('click', window.SDG_IMG_RETRY, true);" +
+            "   if (window.SDG_IMG_FALLBACK) document.removeEventListener('error', window.SDG_IMG_FALLBACK, true);" +
+            "   window.SDG_IMG_RETRY_BOUND = false; window.SDG_IMG_FALLBACK_BOUND = false;" +
+            "   var ph = document.querySelectorAll('img[data-sdg-ph]');" +
+            "   for (var i = 0; i < ph.length; i++) { if (ph[i].dataset.sdgOrig) ph[i].src = ph[i].dataset.sdgOrig;" +
+            "    delete ph[i].dataset.sdgPh; delete ph[i].dataset.sdgOrig; }" +
+            "   var ops = document.querySelectorAll('.plc.sdg-op');" +
+            "   for (var j = 0; j < ops.length; j++) ops[j].classList.remove('sdg-op');" +
+            "   var msg = document.getElementById('fastpostmessage');" +
+            "   if (!msg) { var cands = document.querySelectorAll('textarea, input[type=text]');" +
+            "    for (var m = 0; m < cands.length; m++) if ((cands[m].placeholder||'').indexOf('说') > -1) { msg = cands[m]; break; } }" +
+            "   if (msg) { var bar = msg; for (var k = 0; k < 6 && bar; k++) {" +
+            "    if (getComputedStyle(bar).position === 'fixed') break; bar = bar.parentElement; }" +
+            "    if (bar) { bar.style.removeProperty('background'); bar.style.removeProperty('border-top');" +
+            "     bar.style.removeProperty('backdrop-filter'); } }" +
+            "   document.documentElement.style.removeProperty('background');" +
             "   return 'REMOVED'; }" +
             "  if (document.querySelectorAll(window.SDG_ANCHORS).length === 0) return 'SKIP';" +
             "  window.SDG_ENSURE('sdg-vars', varsCss);" +
             "  window.SDG_ENSURE('sdg-rules', window.SDG_RULES);" +
             "  window.SDG_ENSURE('sdg-hide', window.SDG_HIDE);" +
+            // 关→开循环后监听器必须回归（A-05 往返验收）：绑定靠 _BOUND 标记幂等，
+            // 不能只在 applyScript 首次注入时绑——那会让重开后监听器永久缺失
+            "  if (window.SDG_IMG_RETRY && !window.SDG_IMG_RETRY_BOUND) { document.addEventListener('click', window.SDG_IMG_RETRY, true); window.SDG_IMG_RETRY_BOUND = true; }" +
+            "  if (window.SDG_IMG_FALLBACK && !window.SDG_IMG_FALLBACK_BOUND) { document.addEventListener('error', window.SDG_IMG_FALLBACK, true); window.SDG_IMG_FALLBACK_BOUND = true; }" +
+            "  if (!document.documentElement.style.background) document.documentElement.style.background = 'var(--sdg-surface-variant)';" +
             "  var msg = document.getElementById('fastpostmessage');" +
             "  if (!msg) { var cands = document.querySelectorAll('textarea, input[type=text]');" +
             "   for (var i = 0; i < cands.length; i++) if ((cands[i].placeholder||'').indexOf('说') > -1) { msg = cands[i]; break; } }" +

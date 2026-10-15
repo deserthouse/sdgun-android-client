@@ -61,8 +61,10 @@ object ThemeRules {
           background: transparent !important;
         }
         #loginform button.pnc { width: 100% !important; margin-top: 16px !important; }
-        #loginform input[name=answer] { display: none !important; }
         #loginform li { background: transparent !important; }
+        /* 安全答案输入（A-01）：不隐藏——站方选中安全问题后显示答案行，
+           此前无条件 display:none 让安全提问登录路径无法输入（防御性规则过期反转又一例）。
+           input[name=answer] 带 class=px，自动命中上方 #loginform .px 下划线样式。 */
         /* C-2 字号自适应：over_two/over_one 固定高度在 140% 字号档裁切，改为随内容生长 */
         .over_two, .over_one, .over_2 {
           height: auto !important;

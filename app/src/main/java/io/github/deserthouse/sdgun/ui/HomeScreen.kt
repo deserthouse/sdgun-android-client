@@ -73,6 +73,7 @@ fun HomeScreen(
     state: WebState,
     webView: WebView,
     onOpenSettings: () -> Unit,
+    onNavigateTab: (Int) -> Unit,
 ) {
     val context = LocalContext.current
     val primaryArgb = MaterialTheme.colorScheme.primary.toArgb()
@@ -144,10 +145,8 @@ fun HomeScreen(
                 }
                 AppBottomBar(
                     activeIdx = activeTab(state.currentUrl, state.intendedTab),
-                    onTab = { i ->
-                        state.intendedTab = i
-                        tabUrl(i)?.let { webView.loadUrl(it) }
-                    },
+                    // A-08：统一走 navigateTab（意图记录+重选当前 tab 不重载），由组合层注入
+                    onTab = onNavigateTab,
                     onOpenSettings = onOpenSettings,
                 )
             }

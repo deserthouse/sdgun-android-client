@@ -41,7 +41,7 @@ import kotlinx.coroutines.flow.StateFlow
 fun SettingsScreen(
     prefs: AppPrefs,
     onBack: () -> Unit,
-    onClearLoginState: () -> Unit,
+    onClearLoginState: (onDone: () -> Unit) -> Unit,
     onTab: (Int) -> Unit,
 ) {
     val dynamicColor by prefs.dynamicColor.collectAsStateCompat()
@@ -123,7 +123,9 @@ fun SettingsScreen(
             }
 
             SettingsCard(title = "账户") {
-                var cleared by remember { mutableStateOf(false) }
+                // A-04：清除中禁重复点击；完成回调（Cookie 实际删完）才显示成功
+                var clearing by remember { mutableStateOf(false) }
+                var done by remember { mutableStateOf(false) }
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -132,13 +134,19 @@ fun SettingsScreen(
                     Column(Modifier.weight(1f)) {
                         Text("清除论坛登录态", style = MaterialTheme.typography.bodyLarge)
                         Text(
-                            if (cleared) "已清除，下次打开即为游客状态"
-                            else "等同网页退出登录；只影响本应用内的 Cookie",
+                            when {
+                                clearing -> "清除中…"
+                                done -> "已清除，本应用已退出登录状态"
+                                else -> "仅清理本应用内的 Cookie；不影响其他应用与服务器端账号"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    TextButton(onClick = { onClearLoginState(); cleared = true }) { Text("清除") }
+                    TextButton(
+                        enabled = !clearing,
+                        onClick = { clearing = true; onClearLoginState { done = true; clearing = false } },
+                    ) { Text(if (clearing) "清除中" else "清除") }
                 }
             }
 

@@ -1,6 +1,8 @@
 package io.github.deserthouse.sdgun
 
 import io.github.deserthouse.sdgun.ui.activeTab
+import io.github.deserthouse.sdgun.web.isForumlistUrl
+import io.github.deserthouse.sdgun.web.primaryAcceptType
 import io.github.deserthouse.sdgun.web.shellVerdict
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -70,5 +72,39 @@ class TabAndShellTest {
         assertFalse(shellVerdict("empty"))
         assertFalse(shellVerdict("\"EMPTY\""))
         assertFalse(shellVerdict("garbage"))
+    }
+
+    // ── isForumlistUrl：空壳探测的页型门（A-07） ──
+
+    @Test
+    fun `forumlist urls pass the gate`() {
+        assertTrue(isForumlistUrl("https://bbs.sdgun.com.cn/forum.php?forumlist=1&mobile=2"))
+        assertTrue(isForumlistUrl("https://bbs.sdgun.com.cn/forum.php?mod=forumlist&mobile=2"))
+        assertTrue(isForumlistUrl("https://bbs.sdgun.com.cn/forum.php"))
+    }
+
+    @Test
+    fun `board thread and member pages fail the gate`() {
+        // 关键回归：板块页即使带空子版块区（.sub_forum 无链接）也不得判空壳
+        assertFalse(isForumlistUrl("https://bbs.sdgun.com.cn/forum.php?mod=forumdisplay&fid=193&mobile=2"))
+        assertFalse(isForumlistUrl("https://bbs.sdgun.com.cn/forum.php?mod=viewthread&tid=4120861&mobile=2"))
+        assertFalse(isForumlistUrl("https://bbs.sdgun.com.cn/member.php?mod=logging&action=login&mobile=2"))
+        assertFalse(isForumlistUrl("https://bbs.sdgun.com.cn/forum.php?mod=guide&view=newthread&mobile=2"))
+    }
+
+    // ── primaryAcceptType：文件选择器 acceptTypes 归一（A-06） ──
+
+    @Test
+    fun `first non-blank accept type wins`() {
+        assertEquals("image/png", primaryAcceptType(arrayOf(null, "image/png", "image/jpeg")))
+        assertEquals("application/pdf", primaryAcceptType(arrayOf("application/pdf")))
+    }
+
+    @Test
+    fun `blank or wildcard accept falls back to any`() {
+        assertEquals("*/*", primaryAcceptType(null))
+        assertEquals("*/*", primaryAcceptType(arrayOf<String?>(null, "")))
+        assertEquals("*/*", primaryAcceptType(arrayOf("*/*")))
+        assertEquals("*/*", primaryAcceptType(arrayOf("  ")))
     }
 }

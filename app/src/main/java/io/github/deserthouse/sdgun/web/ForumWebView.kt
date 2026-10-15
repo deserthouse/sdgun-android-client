@@ -47,6 +47,16 @@ class WebState {
     /** 原始错误码（错误页小字诊断用） */
     var loadErrorRaw by mutableStateOf<String?>(null)
 
+    /** 导航代次（A-02）：onPageStarted / doUpdateVisitedHistory 递增。
+     *  延时任务（标题回读/空壳探测）捕获代次，执行时不一致=旧页面任务，作废不写状态。 */
+    var navGeneration: Int = 0
+        internal set
+
+    /** 深链计数（A-08）：handleViewIntent 消费论坛深链后递增，
+     *  UI 层据此把路由切回 home（否则内容在 WebView 里加载而路由停在设置页）。 */
+    var deepLinkTick by mutableIntStateOf(0)
+        internal set
+
     internal var webThemeEnabled: Boolean = true
     /** 页面加载完成时注入的完整主题脚本（applyScript+applyCall 组合，组合层生成） */
     internal var pageThemeJs: String = ""
@@ -55,13 +65,23 @@ class WebState {
 
     internal var pendingFileChooser: ValueCallback<Array<Uri>>? = null
 
-    /** 由组合层注入：启动系统图片选择器 */
-    var requestImagePick: (() -> Unit)? = null
+    /** 文件选择请求：从 FileChooserParams 提取的结构化描述（A-06） */
+    data class FilePickRequest(val multiple: Boolean, val mimeType: String)
 
-    fun consumeFileChooserResult(uri: Uri?) {
-        pendingFileChooser?.onReceiveValue(uri?.let { arrayOf(it) })
+    /** 由组合层注入：启动系统文件/图片选择器 */
+    var requestImagePick: ((FilePickRequest) -> Unit)? = null
+
+    fun consumeFileChooserResult(uris: List<Uri>?) {
+        pendingFileChooser?.onReceiveValue(uris?.toTypedArray())
         pendingFileChooser = null
     }
+}
+
+/** 从 FileChooserParams.acceptTypes 取主类型：首个非空条目；全空=任意文件。
+ *  通配（image 加 / 加星）原样透传给系统选择器。 */
+internal fun primaryAcceptType(acceptTypes: Array<out String?>?): String {
+    val first = acceptTypes?.firstOrNull { !it.isNullOrBlank() }?.trim()
+    return if (first.isNullOrBlank() || first == "*/*") "*/*" else first
 }
 
 /** 网络层/HTTP 层错误码 → 用户可读文案 */
@@ -85,9 +105,18 @@ internal fun humanizeError(raw: String, httpStatus: Int? = null): String {
 
 /** 空壳探测（批次 A，对齐扩展 popup 口径）：论坛首页 .sub_forum 骨架存在但一条板块链接都没有
  *  = 服务器 200 却只回了骨架。收窄到 forumlist 页判定，板块/帖子页不做（防子版块区误伤）。 */
+/** 论坛首页判定（A-07）：forum.php 且无 mod 参数（forum.php?forumlist=1）、
+ *  或 mod=forumlist。板块/帖子/登录页一律 false——板块页的空子版块区
+ *  （.sub_forum 无链接）是正常形态，不参与空壳判定。 */
+internal fun isForumlistUrl(url: String): Boolean {
+    if (!url.contains("forum.php")) return false
+    val mod = Regex("[?&]mod=([^&#]+)").find(url)?.groupValues?.get(1)
+    return mod == null || mod == "forumlist"
+}
+
+/** 空壳探测表达式：调用方已用 isForumlistUrl 把门，这里只判容器与链接。 */
 internal const val SHELL_PROBE_JS =
-    "(function(){if(location.href.indexOf('forum.php')<0)return 'n/a';" +
-        "var sf=document.querySelector('.sub_forum');" +
+    "(function(){var sf=document.querySelector('.sub_forum');" +
         "if(!sf)return 'n/a';" +
         "return sf.querySelector('a')?'ok':'empty'})()"
 
@@ -148,10 +177,14 @@ fun createForumWebView(
                         true
                     }
                     is UrlRules.Verdict.AppScheme -> {
-                        try {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(v.url)))
-                        } catch (_: Exception) {
-                            // 无处理器的 scheme 静默忽略
+                        // A-03：Application Context 发起必须有 NEW_TASK；失败给用户可见反馈而非静默
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(v.url)).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        runCatching { context.startActivity(intent) }.onFailure {
+                            android.widget.Toast.makeText(
+                                context, "无法在手机上打开此链接", android.widget.Toast.LENGTH_SHORT,
+                            ).show()
                         }
                         true
                     }
@@ -160,6 +193,13 @@ fun createForumWebView(
 
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
                 // S-3：保留旧标题直到 onPageFinished 覆写，消除导航间标题闪烁
+                syncNavigationState(view, url)
+            }
+
+            /** 导航状态收口（A-02）：URL/错误态/代次统一在这里更新，
+             *  完整加载与同文档导航（doUpdateVisitedHistory）都走这条路径。 */
+            private fun syncNavigationState(view: WebView, url: String) {
+                state.navGeneration++
                 state.currentUrl = url
                 state.loadError = null
                 state.loadErrorRaw = null
@@ -169,38 +209,53 @@ fun createForumWebView(
                 }
             }
 
+            /** 同文档导航（pushState/replaceState/历史跳转）：帖子页无限翻页走这里，
+             *  只更新 URL 与代次——AJAX 导航不重置错误态（页面没重载）。 */
+            override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                if (url != null) {
+                    state.navGeneration++
+                    state.currentUrl = url
+                }
+            }
+
             override fun onPageFinished(view: WebView, url: String?) {
                 state.title = view.title.orEmpty()
                 if (state.webThemeEnabled && state.pageThemeJs.isNotEmpty()) {
                     view.evaluateJavascript(state.pageThemeJs, null)
                     // 注入脚本会把 <title> 换成页面自身的干净名称（站方标题是"品牌+板块+标题+SEO串"的拼接体）。
                     // 观察器的回写不触发 onReceivedTitle，故此处主动回读一次拿最终值。
-                    view.postDelayed({
-                        runCatching {
-                            view.evaluateJavascript("document.title") { result ->
-                                val t = runCatching {
-                                    org.json.JSONTokener(result).nextValue() as? String
-                                }.getOrNull()
-                                if (!t.isNullOrBlank()) state.title = t
-                            }
+                    scheduleDelayed(view, 1200) {
+                        view.evaluateJavascript("document.title") { result ->
+                            val t = runCatching {
+                                org.json.JSONTokener(result).nextValue() as? String
+                            }.getOrNull()
+                            if (!t.isNullOrBlank()) state.title = t
                         }
-                    }, 1200)
+                    }
                 }
-                // 空壳探测（批次 A）：服务器 200 但只回骨架（网络层无错误、覆盖层不触发），
-                // 延时到首页骨架渲染完再判；复用错误覆盖层给重试入口。
-                if (url != null && state.loadError == null) {
-                    view.postDelayed({
-                        runCatching {
-                            view.evaluateJavascript(SHELL_PROBE_JS) { r ->
-                                if (shellVerdict(r) && state.loadError == null) {
-                                    state.loadError = "服务器只回了个空壳，内容没跟上"
-                                    state.loadErrorRaw = "HTTP 200 · empty shell (.sub_forum without links)"
-                                }
+                // 空壳探测（批次 A / A-07 收紧）：仅论坛首页判定（isForumlistUrl 把门，
+                // 板块页的空子版块区不参与）；服务器 200 但只回骨架时网络层无错误、覆盖层不触发。
+                if (url != null && state.loadError == null && isForumlistUrl(url)) {
+                    scheduleDelayed(view, 2500) {
+                        view.evaluateJavascript(SHELL_PROBE_JS) { r ->
+                            if (shellVerdict(r) && state.loadError == null) {
+                                state.loadError = "服务器只回了个空壳，内容没跟上"
+                                state.loadErrorRaw = "HTTP 200 · empty shell (.sub_forum without links)"
                             }
                         }
-                    }, 2500)
+                    }
                 }
                 (view.parent as? androidx.swiperefreshlayout.widget.SwipeRefreshLayout)?.isRefreshing = false
+            }
+
+            /** 带导航代次校验的延时任务（A-02）：页面切换/同文档跳转后旧任务作废，
+             *  不得把旧页面的探测/标题写进新页面状态。 */
+            private fun scheduleDelayed(view: WebView, delayMs: Long, task: () -> Unit) {
+                val gen = state.navGeneration
+                view.postDelayed({
+                    if (state.navGeneration != gen) return@postDelayed
+                    runCatching { task() }
+                }, delayMs)
             }
 
             override fun onReceivedError(
@@ -238,7 +293,12 @@ fun createForumWebView(
             ): Boolean {
                 state.pendingFileChooser?.onReceiveValue(null)
                 state.pendingFileChooser = callback
-                state.requestImagePick?.invoke() ?: run {
+                // A-06：按网页声明的 mode/acceptTypes 结构化请求，不把所有 input 固定成图片单选
+                val request = WebState.FilePickRequest(
+                    multiple = params?.mode == FileChooserParams.MODE_OPEN_MULTIPLE,
+                    mimeType = primaryAcceptType(params?.acceptTypes),
+                )
+                state.requestImagePick?.invoke(request) ?: run {
                     callback.onReceiveValue(null)
                     state.pendingFileChooser = null
                 }
