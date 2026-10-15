@@ -201,6 +201,18 @@ object ThemeRules {
           opacity: 0 !important;
           background: transparent !important;
         }
+        /* 发帖页（站方 post 模板）：白底表单压暗——探针实证输入框 white bg + white color（白上白不可读）；表单为 #postform（id） */
+        #postform {
+          background: var(--sdg-surface) !important;
+        }
+        #postform input[type=text],
+        #postform select,
+        #postform textarea {
+          background: var(--sdg-surface-variant) !important;
+          color: var(--sdg-on-surface) !important;
+          border: 1px solid var(--sdg-outline-variant) !important;
+          border-radius: 12px !important;
+        }
         /* 板块页帖子分类筛选行（bygsjw byg_thread_types 白底）：整行压暗，选中态由站方 .a 类红框保留 */
         .byg_thread_types {
           background: var(--sdg-surface) !important;

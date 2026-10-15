@@ -14,12 +14,17 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import android.content.Intent
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -73,6 +78,7 @@ fun HomeScreen(
     state: WebState,
     webView: WebView,
     onOpenSettings: () -> Unit,
+    onOpenNews: () -> Unit,
     onNavigateTab: (Int) -> Unit,
 ) {
     val context = LocalContext.current
@@ -92,6 +98,11 @@ fun HomeScreen(
         ExternalLinkDialog(url = url, onDismiss = { state.externalLink = null })
     }
 
+    // AF-03：图片查看器（帖子图片点击触发，GalleryBridge 置 state.gallery）
+    state.gallery?.let { g ->
+        GalleryScreen(data = g, onClose = { state.closeGallery() })
+    }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.surface,
         topBar = {
@@ -105,6 +116,9 @@ fun HomeScreen(
                         )
                     },
                     actions = {
+                        IconButton(onClick = onOpenNews) {
+                            Icon(Icons.Filled.Article, contentDescription = "资讯")
+                        }
                         IconButton(onClick = { webView.loadUrl(UrlRules.SEARCH) }) {
                             Icon(Icons.Filled.Search, contentDescription = "搜索")
                         }
@@ -127,14 +141,36 @@ fun HomeScreen(
         bottomBar = {
             Column {
                 if (state.currentUrl.contains("mod=viewthread")) {
+                    // AF-07：分享方式选择——帖子页且有 tid 时提供 H5 链接（手机浏览器可开）
+                    var shareOpen by remember { mutableStateOf(false) }
+                    if (shareOpen) {
+                        ShareSheet(
+                            forumUrl = state.currentUrl,
+                            h5Url = UrlRules.threadH5Url(state.currentUrl),
+                            onDismiss = { shareOpen = false },
+                            onShare = { url ->
+                                shareOpen = false
+                                val send = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_TEXT, url)
+                                    putExtra(Intent.EXTRA_TITLE, prettyTitle(state.title))
+                                }
+                                context.startActivity(Intent.createChooser(send, "分享帖子"))
+                            },
+                        )
+                    }
                     ThreadActionsRow(
                         onShare = {
-                            val send = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_TEXT, state.currentUrl)
-                                putExtra(Intent.EXTRA_TITLE, prettyTitle(state.title))
+                            if (UrlRules.threadH5Url(state.currentUrl) != null) {
+                                shareOpen = true
+                            } else {
+                                val send = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_TEXT, state.currentUrl)
+                                    putExtra(Intent.EXTRA_TITLE, prettyTitle(state.title))
+                                }
+                                context.startActivity(Intent.createChooser(send, "分享帖子"))
                             }
-                            context.startActivity(Intent.createChooser(send, "分享帖子"))
                         },
                         onTop = {
                             webView.evaluateJavascript(
@@ -214,4 +250,35 @@ private fun ThreadActionsRow(
             Text("回顶")
         }
     }
+}
+
+
+/** 分享方式选择（AF-07）：论坛链接与 H5 链接（手机浏览器可打开）二选一 */
+@Composable
+private fun ShareSheet(forumUrl: String, h5Url: String?, onDismiss: () -> Unit, onShare: (String) -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {},
+        dismissButton = {},
+        title = { Text("分享帖子") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { onDismiss(); onShare(forumUrl) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("论坛链接", modifier = Modifier.fillMaxWidth())
+                }
+                if (h5Url != null) {
+                    TextButton(onClick = { onDismiss(); onShare(h5Url) }, modifier = Modifier.fillMaxWidth()) {
+                        Column {
+                            Text("H5 链接（手机浏览器可打开）")
+                            Text(
+                                "适合分享到手机；电脑浏览器可能打不开",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+    )
 }

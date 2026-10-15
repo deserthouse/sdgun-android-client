@@ -57,6 +57,13 @@ class WebState {
     var deepLinkTick by mutableIntStateOf(0)
         internal set
 
+    /** 图片查看器（AF-03）：null=关闭；非 null=全屏查看器展示该图组 */
+    var gallery by mutableStateOf<GalleryData?>(null)
+
+    fun closeGallery() {
+        gallery = null
+    }
+
     internal var webThemeEnabled: Boolean = true
     /** 页面加载完成时注入的完整主题脚本（applyScript+applyCall 组合，组合层生成） */
     internal var pageThemeJs: String = ""
@@ -139,6 +146,10 @@ fun createForumWebView(
     startUrl: String? = UrlRules.HOME,
 ): WebView {
     val wv = WebView(context)
+    // AF-03：图片点击 → 原生查看器的正式桥（仅暴露图组 JSON 解析，见 GalleryBridge）
+    wv.addJavascriptInterface(GalleryBridge(state), "sdgGallery")
+    // AF-02 方案 A：列表增强回填通道（回调在主线程 evaluate 进 WebView）
+    wv.addJavascriptInterface(EnrichBridge { js -> wv.post { wv.evaluateJavascript(js, null) } }, "sdgEnrich")
     return wv.apply {
         @Suppress("SetJavaScriptEnabled")
         settings.apply {
@@ -192,6 +203,12 @@ fun createForumWebView(
             }
 
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                // 门户死端守卫（对齐扩展 navguard）：search.php 等路径被站方跳门户，
+                // 检测到即拉回论坛首页（HOME 带 forumlist 参数，不会循环）
+                if (UrlRules.isPortalDeadEnd(url)) {
+                    view.loadUrl(UrlRules.HOME)
+                    return
+                }
                 // S-3：保留旧标题直到 onPageFinished 覆写，消除导航间标题闪烁
                 syncNavigationState(view, url)
             }

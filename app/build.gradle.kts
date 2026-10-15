@@ -11,7 +11,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val APP_VERSION_NAME = "1.2.3"
+val APP_VERSION_NAME = "1.4.0"
 
 android {
     namespace = "io.github.deserthouse.sdgun"
@@ -21,7 +21,7 @@ android {
         applicationId = "io.github.deserthouse.sdgun"
         minSdk = 31
         targetSdk = 37
-        versionCode = 14
+        versionCode = 16
         versionName = APP_VERSION_NAME
     }
 
@@ -119,6 +119,8 @@ dependencies {
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
 
     testImplementation("junit:junit:4.13.2")
+    // JVM 单测用 org.json 真实现（android.jar 里是抛 Stub! 的空壳）
+    testImplementation("org.json:json:20240303")
 
     // ━━━ Navigation ━━━
     implementation("androidx.navigation:navigation-compose:2.9.0")

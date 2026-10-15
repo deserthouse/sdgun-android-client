@@ -105,6 +105,36 @@ object ThemeInjector {
             "  var bi = document.querySelectorAll('.bm img');" +
             "  for (var k = 0; k < bi.length; k++) if (bi[k].complete && bi[k].naturalWidth === 0) { bi[k].dataset.sdgPh = '1'; bi[k].dataset.sdgOrig = bi[k].src; bi[k].src = window.SDG_IMG_PH; }" +
             " };" +
+            " if (!window.SDG_ENRICH_APPLY) {" +
+            // AF-02 方案 A 回填：tid → 行容器插头像/封面缩略/点赞徽标（行打标防重复）
+            " window.SDG_ENRICH_APPLY = function(data) {" +
+            "  var th = (data && data.threads) || {};" +
+            "  Array.prototype.forEach.call(document.querySelectorAll('a[href*=\"mod=viewthread\"]'), function(a){" +
+            "   var m = a.href.match(/[?&]tid=(\\d+)/); if (!m) return;" +
+            "   var row = a.closest('.threadlist li, li, .plc_xin, .plc') || a.parentElement;" +
+            "   if (!row || row.dataset.sdgEn) return; row.dataset.sdgEn = '1';" +
+            "   var d = th[m[1]]; if (!d) return;" +
+            "   row.style.position = 'relative';" +
+            "   if (d.a && !row.querySelector('img.sdg-avatar')) {" +
+            "    var av = document.createElement('img'); av.src = d.a; av.className = 'sdg-avatar';" +
+            "    av.style.cssText = 'position:absolute;left:6px;top:8px;width:40px;height:40px;border-radius:10px;object-fit:cover;background:var(--sdg-surface-variant);';" +
+            "    row.appendChild(av);" +
+            "    row.style.paddingLeft = '52px';" +
+            "    row.style.boxSizing = 'border-box';" +
+            "   }" +
+            "   if (d.c && !row.querySelector('.list_img1, img.sdg-cover')) {" +
+            "    var cv = document.createElement('img'); cv.src = d.c; cv.className = 'sdg-cover';" +
+            "    cv.style.cssText = 'float:right;width:76px;height:56px;border-radius:8px;object-fit:cover;margin:4px 6px;background:var(--sdg-surface-variant);';" +
+            "    row.insertBefore(cv, row.firstChild.nextSibling || row.firstChild);" +
+            "   }" +
+            "   if (d.z >= 0 && !row.querySelector('.sdg-zan')) {" +
+            "    var z = document.createElement('span'); z.className = 'sdg-zan';" +
+            "    z.style.cssText = 'position:absolute;right:6px;bottom:4px;font-size:11px;color:var(--sdg-on-surface-variant);';" +
+            "    z.textContent = '赞 ' + d.z; row.appendChild(z);" +
+            "   }" +
+            "  });" +
+            " };" +
+            " }" +
             " window.SDG_APPLY = function(varsCss, enabled) {" +
             // A-05：关闭=对称撤销本注入做过的全部修改——style 节点、chips、观察器、
             // 监听器、sdg 标记类、fastpost 内联覆盖、破图占位、earlyBg 底色。
@@ -117,7 +147,8 @@ object ThemeInjector {
             "    window.SDG_TITLE_OBS = null; window.SDG_TITLE_TARGET = ''; }" +
             "   if (window.SDG_IMG_RETRY) document.removeEventListener('click', window.SDG_IMG_RETRY, true);" +
             "   if (window.SDG_IMG_FALLBACK) document.removeEventListener('error', window.SDG_IMG_FALLBACK, true);" +
-            "   window.SDG_IMG_RETRY_BOUND = false; window.SDG_IMG_FALLBACK_BOUND = false;" +
+            "   if (window.SDG_GALLERY_CLICK) document.removeEventListener('click', window.SDG_GALLERY_CLICK, true);" +
+            "   window.SDG_IMG_RETRY_BOUND = false; window.SDG_IMG_FALLBACK_BOUND = false; window.SDG_GALLERY_BOUND = false;" +
             "   var ph = document.querySelectorAll('img[data-sdg-ph]');" +
             "   for (var i = 0; i < ph.length; i++) { if (ph[i].dataset.sdgOrig) ph[i].src = ph[i].dataset.sdgOrig;" +
             "    delete ph[i].dataset.sdgPh; delete ph[i].dataset.sdgOrig; }" +
@@ -141,6 +172,49 @@ object ThemeInjector {
             "  if (window.SDG_IMG_RETRY && !window.SDG_IMG_RETRY_BOUND) { document.addEventListener('click', window.SDG_IMG_RETRY, true); window.SDG_IMG_RETRY_BOUND = true; }" +
             "  if (window.SDG_IMG_FALLBACK && !window.SDG_IMG_FALLBACK_BOUND) { document.addEventListener('error', window.SDG_IMG_FALLBACK, true); window.SDG_IMG_FALLBACK_BOUND = true; }" +
             "  if (!document.documentElement.style.background) document.documentElement.style.background = 'var(--sdg-surface-variant)';" +
+            // AF-03：帖子正文图片点击 → 收集可见图组 → 原生查看器（委托绑定，img 上打标防重复）
+            // 容器：bygsjw 触屏版正文=.message（装机实证），.pct/.t_f 兼容标准 Discuz 形态
+            "  window.SDG_GALLERY_CLICK = function(e) {" +
+            "  var im = e.target;" +
+            "  if (!im || im.tagName !== 'IMG') return;" +
+            "  var box = im.closest('.message, .pct, .t_f');" +
+            "  if (!box) return;" +
+            "  var imgs = Array.prototype.filter.call(box.querySelectorAll('img'), function(x){" +
+            "   var s = x.currentSrc || x.src; return s && s.indexOf('http') === 0 && x.naturalWidth > 1 && !x.closest('a'); });" +
+            "  if (imgs.length === 0) return;" +
+            "  var urls = []; var idx = 0;" +
+            "  for (var i = 0; i < imgs.length; i++) {" +
+            "   var s = imgs[i].currentSrc || imgs[i].src; urls.push(s);" +
+            "   if (imgs[i] === im) idx = i; }" +
+            "  if (window.sdgGallery && window.sdgGallery.open) {" +
+            "   e.preventDefault(); e.stopPropagation();" +
+            "   window.sdgGallery.open(JSON.stringify({urls: urls, index: idx})); } };" +
+            "  if (!window.SDG_GALLERY_BOUND) { document.addEventListener('click', window.SDG_GALLERY_CLICK, true); window.SDG_GALLERY_BOUND = true; }" +
+            // AF-02 方案 A：板块页列表增强——收集行 tid 上报原生（拉 forumView 游客数据），回填头像/封面/点赞
+            "  if (location.href.indexOf('mod=forumdisplay') > -1 && window.sdgEnrich) {" +
+            "   var seen = {}; var tids = [];" +
+            "   Array.prototype.forEach.call(document.querySelectorAll('a[href*=\"mod=viewthread\"]'), function(a){" +
+            "    var m = a.href.match(/[?&]tid=(\\d+)/); if (!m || seen[m[1]]) return; seen[m[1]] = 1; tids.push(m[1]); });" +
+            "   if (tids.length > 0) {" +
+            "    var fmatch = location.href.match(/[?&]fid=(\\d+)/);" +
+            "    if (fmatch) window.sdgEnrich.enrich(JSON.stringify({fid: parseInt(fmatch[1]), tids: tids.slice(0, 60)}));" +
+            "   }" +
+            "  }" +
+            // AF-05：板块页工具行——搜本板块 / 发帖（真实页面链接）
+            "  if (location.href.indexOf('mod=forumdisplay') > -1 && !document.getElementById('sdg-tools')) {" +
+            "   var f2 = location.href.match(/[?&]fid=(\\d+)/);" +
+            "   var anchor = document.querySelector('.byg_thread_types');" +
+            "   if (f2 && anchor && anchor.parentNode) {" +
+            "    var bar = document.createElement('div'); bar.id = 'sdg-tools';" +
+            "    bar.style.cssText = 'display:flex;gap:8px;padding:8px 12px;';" +
+            "    var mkTool = function(label, href) { var a = document.createElement('a'); a.href = href;" +
+            "     a.style.cssText = 'flex:0 0 auto;padding:6px 14px;border-radius:999px;background:var(--sdg-surface-variant);color:var(--sdg-on-surface);font-size:13px;text-decoration:none;';" +
+            "     a.textContent = label; bar.appendChild(a); };" +
+            "    mkTool('搜本板块', 'forum.php?mod=forum&srchfid=' + f2[1] + '&srchtxt=&searchsort=&mobile=2');" +
+            "    mkTool('发帖', 'forum.php?mod=post&action=newthread&fid=' + f2[1] + '&mobile=2');" +
+            "    anchor.parentNode.insertBefore(bar, anchor.nextSibling);" +
+            "   }" +
+            "  }" +
             "  var msg = document.getElementById('fastpostmessage');" +
             "  if (!msg) { var cands = document.querySelectorAll('textarea, input[type=text]');" +
             "   for (var i = 0; i < cands.length; i++) if ((cands[i].placeholder||'').indexOf('说') > -1) { msg = cands[i]; break; } }" +
@@ -150,8 +224,42 @@ object ThemeInjector {
             "    bar.style.borderTop = '1px solid var(--sdg-outline-variant)';" +
             "    bar.style.backdropFilter = 'none'; } }" +
             "  if (document.querySelectorAll('div[data-byginto]').length > 0) window.SDG_CHIPS();" +
-            "  if (location.href.indexOf('mod=viewthread') > -1) { var fl = document.querySelectorAll('.postlist .plc:not(.plc_xin)');" +
-            "   if (fl.length > 1) fl[0].classList.add('sdg-op'); }" +
+            // C4：常用板块（localStorage 记录最近访问的板块，首页渲染直达 chips；纯客户端，无隐私面）
+            "  if (location.href.indexOf('mod=forumdisplay') > -1) {" +
+            "   var fm3 = location.href.match(/[?&]fid=(\\d+)/);" +
+            "   var hf3 = document.querySelector('.header_font');" +
+            "   if (fm3 && hf3 && hf3.textContent.trim()) {" +
+            "    try { var rb = JSON.parse(localStorage.getItem('sdgRecentBoards') || '[]');" +
+            "     rb = rb.filter(function(x) { return x.fid !== fm3[1]; });" +
+            "     rb.unshift({fid: fm3[1], name: hf3.textContent.trim().slice(0, 12)});" +
+            "     localStorage.setItem('sdgRecentBoards', JSON.stringify(rb.slice(0, 5))); } catch(e3) {}" +
+            "   }" +
+            "  }" +
+            "  if (location.href.indexOf('forumlist=1') > -1 && !document.getElementById('sdg-recent')) {" +
+            "   try { var rb2 = JSON.parse(localStorage.getItem('sdgRecentBoards') || '[]');" +
+            "    if (rb2.length > 0) {" +
+            "     var bar2 = document.createElement('div'); bar2.id = 'sdg-recent';" +
+            "     bar2.style.cssText = 'display:flex;gap:8px;overflow-x:auto;padding:8px 12px;scrollbar-width:none;';" +
+            "     var mk2 = function(label, fid) { var c = document.createElement('span');" +
+            "      c.style.cssText = 'flex:0 0 auto;padding:5px 12px;border-radius:999px;background:var(--sdg-surface-variant);color:var(--sdg-on-surface);font-size:13px;white-space:nowrap;cursor:pointer;';" +
+            "      c.textContent = label;" +
+            "      c.onclick = function() { location.href = 'forum.php?mod=forumdisplay&fid=' + fid + '&mobile=2'; }; bar2.appendChild(c); };" +
+            "     for (var ri = 0; ri < rb2.length; ri++) mk2(rb2[ri].name, rb2[ri].fid);" +
+            "     var chips = document.getElementById('sdg-chips');" +
+            "     if (chips && chips.parentNode) chips.parentNode.insertBefore(bar2, chips.nextSibling);" +
+            "     else document.body.insertBefore(bar2, document.body.firstChild);" +
+            "    } } catch(e4) {}" +
+            "  }" +
+            // AF-04：楼主身份按作者判定（位置打标在广告/置顶楼层会错标）——首楼作者的所有楼层都带 OP 标记
+            "  if (location.href.indexOf('mod=viewthread') > -1) {" +
+            "   var fl = document.querySelectorAll('.postlist .plc:not(.plc_xin)');" +
+            "   var author0 = '';" +
+            "   if (fl.length > 0) { var a0 = fl[0].querySelector('.authi a');" +
+            "    if (a0) author0 = (a0.textContent || '').trim(); }" +
+            "   for (var oi = 0; oi < fl.length; oi++) {" +
+            "    var ai = fl[oi].querySelector('.authi a');" +
+            "    if (ai && author0 && (ai.textContent || '').trim() === author0) fl[oi].classList.add('sdg-op');" +
+            "   } }" +
             // 原生栏标题取页面自身 DOM（站方 <title> 是"品牌+板块+标题+SEO 串"的拼接体，读起来糊成一团）
             "  var ttl = '';" +
             "  if (location.href.indexOf('mod=viewthread') > -1) {" +

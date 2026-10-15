@@ -28,6 +28,7 @@ import io.github.deserthouse.sdgun.ui.AppBottomBar
 import io.github.deserthouse.sdgun.ui.HomeScreen
 import io.github.deserthouse.sdgun.ui.activeTab
 import io.github.deserthouse.sdgun.ui.tabUrl
+import io.github.deserthouse.sdgun.ui.NewsScreen
 import io.github.deserthouse.sdgun.ui.SettingsScreen
 import io.github.deserthouse.sdgun.ui.theme.SDGunTheme
 import io.github.deserthouse.sdgun.web.ThemeInjector
@@ -182,7 +183,17 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                 state = state,
                 webView = webView,
                 onOpenSettings = { navController.navigate("settings") },
+                onOpenNews = { navController.navigate("news") },
                 onNavigateTab = ::navigateTab,
+            )
+        }
+        composable("news") {
+            NewsScreen(
+                onBack = { navController.popBackStack() },
+                onOpenLink = { url ->
+                    navController.popBackStack()
+                    webView.loadUrl(url)
+                },
             )
         }
         composable("settings") {

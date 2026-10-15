@@ -1,6 +1,8 @@
 package io.github.deserthouse.sdgun
 
 import io.github.deserthouse.sdgun.ui.activeTab
+import io.github.deserthouse.sdgun.web.GalleryBridge
+import io.github.deserthouse.sdgun.web.UrlRules
 import io.github.deserthouse.sdgun.web.isForumlistUrl
 import io.github.deserthouse.sdgun.web.primaryAcceptType
 import io.github.deserthouse.sdgun.web.shellVerdict
@@ -106,5 +108,69 @@ class TabAndShellTest {
         assertEquals("*/*", primaryAcceptType(arrayOf<String?>(null, "")))
         assertEquals("*/*", primaryAcceptType(arrayOf("*/*")))
         assertEquals("*/*", primaryAcceptType(arrayOf("  ")))
+    }
+
+    // ── AF-07：H5 分享链接构造 ──
+
+    @Test
+    fun `h5 url built from thread url`() {
+        assertEquals(
+            "https://app.sdgun.com.cn/mag/circle/v1/forum/threadWapPage?tid=4120861",
+            UrlRules.threadH5Url("https://bbs.sdgun.com.cn/forum.php?mod=viewthread&tid=4120861&mobile=2"),
+        )
+        // 带分页参数的帖子页同样提取 tid
+        assertEquals(
+            "https://app.sdgun.com.cn/mag/circle/v1/forum/threadWapPage?tid=3736041",
+            UrlRules.threadH5Url("https://bbs.sdgun.com.cn/forum.php?mod=viewthread&tid=3736041&page=2&mobile=2"),
+        )
+    }
+
+    @Test
+    fun `h5 url null on non-thread pages`() {
+        assertEquals(null, UrlRules.threadH5Url("https://bbs.sdgun.com.cn/forum.php?forumlist=1&mobile=2"))
+        assertEquals(null, UrlRules.threadH5Url("https://bbs.sdgun.com.cn/forum.php?mod=forumdisplay&fid=193&mobile=2"))
+        assertEquals(null, UrlRules.threadH5Url("https://bbs.sdgun.com.cn/member.php?mod=logging&action=login&mobile=2"))
+    }
+
+    // ── AF-03：图组 JSON 解析（fail-closed） ──
+
+    @Test
+    fun `gallery payload parses urls and index`() {
+        val d = GalleryBridge.parseGalleryPayload("{\"urls\":[\"http://a/1.jpg\",\"http://a/2.jpg\"],\"index\":1}")
+        assertEquals(listOf("http://a/1.jpg", "http://a/2.jpg"), d?.urls)
+        assertEquals(1, d?.startIndex)
+    }
+
+    @Test
+    fun `gallery payload fails closed on garbage`() {
+        assertEquals(null, GalleryBridge.parseGalleryPayload(null))
+        assertEquals(null, GalleryBridge.parseGalleryPayload(""))
+        assertEquals(null, GalleryBridge.parseGalleryPayload("not json"))
+        assertEquals(null, GalleryBridge.parseGalleryPayload("{\"urls\":[]\"}"))
+    }
+
+    @Test
+    fun `gallery payload rejects non-http and clamps index`() {
+        val d = GalleryBridge.parseGalleryPayload("{\"urls\":[\"javascript:x\",\"http://a/ok.jpg\"],\"index\":9}")
+        assertEquals(listOf("http://a/ok.jpg"), d?.urls)
+        assertEquals(0, d?.startIndex)
+    }
+
+    // ── 门户死端守卫（对齐扩展 navguard） ──
+
+    @Test
+    fun `portal and bare forum php are dead ends`() {
+        assertTrue(UrlRules.isPortalDeadEnd("https://bbs.sdgun.com.cn/portal.php"))
+        assertTrue(UrlRules.isPortalDeadEnd("https://bbs.sdgun.com.cn/forum.php"))
+        assertTrue(UrlRules.isPortalDeadEnd("https://bbs.sdgun.com.cn/forum.php?mobile=2"))
+    }
+
+    @Test
+    fun `real forum pages are not dead ends`() {
+        assertFalse(UrlRules.isPortalDeadEnd("https://bbs.sdgun.com.cn/forum.php?forumlist=1&mobile=2"))
+        assertFalse(UrlRules.isPortalDeadEnd("https://bbs.sdgun.com.cn/forum.php?mod=forumdisplay&fid=193&mobile=2"))
+        assertFalse(UrlRules.isPortalDeadEnd("https://bbs.sdgun.com.cn/forum.php?mod=viewthread&tid=1&mobile=2"))
+        assertFalse(UrlRules.isPortalDeadEnd("https://bbs.sdgun.com.cn/member.php?mod=logging&action=login&mobile=2"))
+        assertFalse(UrlRules.isPortalDeadEnd("https://app.sdgun.com.cn/mag/circle/v1/forum/threadWapPage?tid=1"))
     }
 }
