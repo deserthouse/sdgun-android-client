@@ -56,6 +56,9 @@ class WebState {
     var destroyed: Boolean = false
         internal set
 
+    /** 组合层注册的清理钩子（SV-2：释放 enrich 线程池等），onDestroy 触发 */
+    var onCleared: (() -> Unit)? = null
+
     /** 深链计数（A-08）：handleViewIntent 消费论坛深链后递增，
      *  UI 层据此把路由切回 home（否则内容在 WebView 里加载而路由停在设置页）。 */
     var deepLinkTick by mutableIntStateOf(0)
@@ -120,8 +123,14 @@ internal fun humanizeError(raw: String, httpStatus: Int? = null): String {
  *  或 mod=forumlist。板块/帖子/登录页一律 false——板块页的空子版块区
  *  （.sub_forum 无链接）是正常形态，不参与空壳判定。 */
 internal fun isForumlistUrl(url: String): Boolean {
+    // 纯字符串解析（JVM 单测可用，不依赖 android.net.Uri stub）
     if (!url.contains("forum.php")) return false
-    val mod = Regex("[?&]mod=([^&#]+)").find(url)?.groupValues?.get(1)
+    val query = url.substringAfter('?', "")
+    var mod: String? = null
+    query.split('&').forEach { part ->
+        val kv = part.split('=', limit = 2)
+        if (kv.size == 2 && kv[0] == "mod") mod = kv[1]
+    }
     return mod == null || mod == "forumlist"
 }
 
@@ -154,6 +163,7 @@ fun createForumWebView(
     // mag1 等域外页面导航开始即摘除，页面加载时不再注入任何桥对象
     val galleryBridge = GalleryBridge(state)
     val enrichBridge = EnrichBridge(state) { js -> wv.post { wv.evaluateJavascript(js, null) } }
+    state.onCleared = { enrichBridge.dispose() }
     var bridgesAttached = true
     wv.addJavascriptInterface(galleryBridge, "sdgGallery")
     wv.addJavascriptInterface(enrichBridge, "sdgEnrich")
@@ -216,9 +226,9 @@ fun createForumWebView(
                     view.loadUrl(UrlRules.HOME)
                     return
                 }
-                // AR-01：桥按域装卸——离开 bbs 家族（如资讯详情 mag1 域）即摘除，
-                // 域外页面加载后 window 上不存在任何桥对象
-                val onBbs = Uri.parse(url).host?.let { it == "bbs.sdgun.com.cn" || it.endsWith(".sdgun.com.cn") } == true
+                // AR-01/SV-4：桥按域装卸——仅 bbs.sdgun.com.cn 精确匹配挂载
+                //（mag1/app 等其他域的页面加载后 window 上不存在任何桥对象）
+                val onBbs = Uri.parse(url).host == "bbs.sdgun.com.cn"
                 if (!onBbs && bridgesAttached) {
                     view.removeJavascriptInterface("sdgGallery")
                     view.removeJavascriptInterface("sdgEnrich")

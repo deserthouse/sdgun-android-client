@@ -57,28 +57,6 @@ object GalleryBitmapLoader {
     private val main = Handler(Looper.getMainLooper())
     private const val MAX_DIMEN = 2048
 
-    /** AR-03：按目标尺寸采样解码（先读 bounds 再整图），限制瞬时像素分配 */
-    private fun decodeSampled(stream: java.io.InputStream, outW: Int, outH: Int): Bitmap? {
-        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        val head = stream.readBytes()
-        BitmapFactory.decodeByteArray(head, 0, head.size, opts)
-        var sample = 1
-        if (opts.outWidth > outW || opts.outHeight > outH) {
-            var w = opts.outWidth
-            var h = opts.outHeight
-            while (w / 2 >= outW && h / 2 >= outH) {
-                sample *= 2
-                w /= 2
-                h /= 2
-            }
-        }
-        val opts2 = BitmapFactory.Options().apply {
-            inSampleSize = sample
-            inPreferredConfig = Bitmap.Config.RGB_565
-        }
-        return BitmapFactory.decodeByteArray(head, 0, head.size, opts2)
-    }
-
     /**
      * AR-03：reqId=请求代次（同一 URL 快速翻页时旧任务回调被丢弃）；
      * 响应体上限 12MB 防异常大图；显式 disconnect。
@@ -92,9 +70,21 @@ object GalleryBitmapLoader {
                 conn.readTimeout = 20000
                 conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 16) Chrome/130.0.0.0 Mobile Safari/537.36")
                 try {
+                    if (conn.contentLength > 12 * 1024 * 1024) return@runCatching null
                     conn.inputStream.use { stream ->
-                        val head = stream.readBytes()
-                        if (head.size > 12 * 1024 * 1024) return@use null
+                        // SV-5：限长读取（64KB 块循环，超 12MB 即断）——峰值内存有界
+                        val cap = 12 * 1024 * 1024
+                        val buf = java.io.ByteArrayOutputStream()
+                        val chunk = ByteArray(65536)
+                        var total = 0
+                        var n = stream.read(chunk)
+                        while (n >= 0) {
+                            total += n
+                            if (total > cap) return@runCatching null
+                            buf.write(chunk, 0, n)
+                            n = stream.read(chunk)
+                        }
+                        val head = buf.toByteArray()
                         // 两段式：先用头部探测尺寸（decodeByteArray 不消耗网络流）
                         val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                         BitmapFactory.decodeByteArray(head, 0, head.size, opts)

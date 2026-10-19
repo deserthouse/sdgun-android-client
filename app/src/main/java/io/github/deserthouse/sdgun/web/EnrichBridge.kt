@@ -24,6 +24,11 @@ class EnrichBridge(
     private val main: Handler by lazy { Handler(Looper.getMainLooper()) }
     private val pool: java.util.concurrent.ExecutorService by lazy { Executors.newSingleThreadExecutor() }
 
+    /** SV-2：Activity 销毁时释放线程池（回调侧有 destroyed/页面校验兜底，仅止资源泄漏） */
+    fun dispose() {
+        pool.shutdown()
+    }
+
     @JavascriptInterface
     fun enrich(payload: String?, themeEnabled: Boolean, pageUrl: String?) {
         val req = parseRequest(payload) ?: return

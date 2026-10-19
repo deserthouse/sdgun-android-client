@@ -122,6 +122,28 @@ fun SettingsScreen(
                 }
             }
 
+            SettingsCard(title = "开发者") {
+                val debugBridge by prefs.debugBridge.collectAsStateCompat()
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("调试桥", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "允许本机自动化工具注入 JS 到页面（仅调试构建有效）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    androidx.compose.material3.Switch(
+                        checked = debugBridge,
+                        onCheckedChange = { prefs.setDebugBridge(it) },
+                    )
+                }
+            }
+
             SettingsCard(title = "账户") {
                 // A-04：清除中禁重复点击；完成回调（Cookie 实际删完）才显示成功
                 var clearing by remember { mutableStateOf(false) }

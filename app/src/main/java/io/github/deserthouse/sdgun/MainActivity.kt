@@ -61,7 +61,10 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+        // S1-9：调试桥可经设置页关闭（默认开）；release 构建永不注册
+        val prefs = AppPrefs(applicationContext)
+        val debugBridgeEnabled = prefs.debugBridge.value
+        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0 && debugBridgeEnabled) {
             debugJsReceiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context, i: Intent) {
                     val b64 = i.getStringExtra("b64") ?: return
@@ -84,7 +87,6 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        val prefs = AppPrefs(applicationContext)
         setContent {
             val dynamicColor by prefs.dynamicColor.collectAsState()
             SDGunTheme(dynamicColor = dynamicColor) {
@@ -96,6 +98,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         debugJsReceiver?.let { runCatching { unregisterReceiver(it) } }
         state.destroyed = true
+        state.onCleared?.invoke()
         // A-06 残余：销毁时完成挂起的文件选择回调（恰好一次，取消=null）
         state.consumeFileChooserResult(null)
         CookieManager.getInstance().flush()

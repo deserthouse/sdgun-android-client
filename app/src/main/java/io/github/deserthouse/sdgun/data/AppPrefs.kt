@@ -17,6 +17,9 @@ class AppPrefs(context: Context) {
     private val _webTheme = MutableStateFlow(sp.getBoolean(KEY_WEB_THEME, true))
     val webTheme: StateFlow<Boolean> = _webTheme
 
+    private val _debugBridge = MutableStateFlow(sp.getBoolean(KEY_DEBUG_BRIDGE, true))
+    val debugBridge: StateFlow<Boolean> = _debugBridge
+
     private val _textZoom = MutableStateFlow(sp.getInt(KEY_TEXT_ZOOM, 100))
     val textZoom: StateFlow<Int> = _textZoom
 
@@ -30,6 +33,11 @@ class AppPrefs(context: Context) {
         _webTheme.value = v
     }
 
+    fun setDebugBridge(v: Boolean) {
+        sp.edit().putBoolean(KEY_DEBUG_BRIDGE, v).apply()
+        _debugBridge.value = v
+    }
+
     fun setTextZoom(v: Int) {
         sp.edit().putInt(KEY_TEXT_ZOOM, v).apply()
         _textZoom.value = v
@@ -39,5 +47,6 @@ class AppPrefs(context: Context) {
         const val KEY_DYNAMIC_COLOR = "dynamic_color"
         const val KEY_WEB_THEME = "web_theme"
         const val KEY_TEXT_ZOOM = "text_zoom"
-    }
+    
+        const val KEY_DEBUG_BRIDGE = "debug_bridge"}
 }

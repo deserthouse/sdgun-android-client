@@ -125,11 +125,9 @@ object ThemeInjector {
             "  var hdr = document.getElementById('byg_header');" +
             "  if (hdr && hdr.parentElement) hdr.parentElement.insertBefore(bar, hdr.nextSibling);" +
             "  document.body.classList.add('sdg-home');" +
-            "  window.SDG_IMG_PH = 'data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22><rect width=%2248%22 height=%2248%22 rx=%2210%22 fill=%22%235a5d68%22 fill-opacity=%220.45%22/></svg>';" +
-            "  window.SDG_IMG_FALLBACK = function(e) { var im = e.target;" +
-            "   if (!im || im.tagName !== 'IMG' || im.dataset.sdgPh || !im.closest('.bm')) return;" +
-            "   im.dataset.sdgPh = '1'; im.dataset.sdgOrig = im.src; im.src = window.SDG_IMG_PH; };" +
-            "  if (!window.SDG_IMG_FALLBACK_BOUND) { document.addEventListener('error', window.SDG_IMG_FALLBACK, true); window.SDG_IMG_FALLBACK_BOUND = true; }" +
+            // SV-1：此处不得重定义 SDG_IMG_FALLBACK——监听器已在 IIFE 一次性定义（含
+            // SDG_ACTIVE 令牌门控），重定义会以未门控版本覆盖之（首页关闭主题后占位仍生效）。
+            // 破图占位 eager 扫描直接复用 IIFE 的函数与占位符。
             "  var bi = document.querySelectorAll('.bm img');" +
             "  for (var k = 0; k < bi.length; k++) if (bi[k].complete && bi[k].naturalWidth === 0) { bi[k].dataset.sdgPh = '1'; bi[k].dataset.sdgOrig = bi[k].src; bi[k].src = window.SDG_IMG_PH; }" +
             " };" +
@@ -141,7 +139,9 @@ object ThemeInjector {
             "   var m = a.href.match(/[?&]tid=(\\d+)/); if (!m) return;" +
             "   var row = a.closest('.threadlist li, li, .plc_xin, .plc') || a.parentElement;" +
             "   var d = th[m[1]]; if (!row || !d) return;" +
-            "   if (!row.dataset.sdgEn) { row.dataset.sdgEn = '1'; row.style.position = 'relative'; }" +
+            "   if (!row.dataset.sdgEn) { row.dataset.sdgEn = '1';" +
+            "    row.dataset.sdgPos0 = row.style.position || ''; row.dataset.sdgPad0 = row.style.paddingLeft || '';" +
+            "    row.style.position = 'relative'; }" +
             "   if (d.a && !row.querySelector('img.sdg-avatar')) {" +
             "    var av = document.createElement('img'); av.src = d.a; av.className = 'sdg-avatar';" +
             "    av.style.cssText = 'position:absolute;left:6px;top:8px;width:40px;height:40px;border-radius:10px;object-fit:cover;background:var(--sdg-surface-variant);';" +

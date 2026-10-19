@@ -30,6 +30,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -89,9 +91,10 @@ fun NewsScreen(
         if (loadingMore || endReached || loading) return
         loadingMore = true
         val page = nextPage
-        Thread {
+        // SV-6：composition 绑定的协程——离开页面后自动取消，不再写已离开的状态
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             val fetched = loadNews(page, 1)
-            android.os.Handler(android.os.Looper.getMainLooper()).post {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                 loadingMore = false
                 if (fetched == null || fetched.isEmpty()) {
                     endReached = true
@@ -106,7 +109,7 @@ fun NewsScreen(
                     } else endReached = true
                 }
             }
-        }.start()
+        }
     }
 
     Scaffold(
