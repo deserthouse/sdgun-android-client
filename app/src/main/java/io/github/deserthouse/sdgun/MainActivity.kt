@@ -3,6 +3,8 @@ package io.github.deserthouse.sdgun
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import androidx.compose.ui.platform.LocalContext
 import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
@@ -93,6 +95,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         debugJsReceiver?.let { runCatching { unregisterReceiver(it) } }
+        state.destroyed = true
+        // A-06 残余：销毁时完成挂起的文件选择回调（恰好一次，取消=null）
+        state.consumeFileChooserResult(null)
         CookieManager.getInstance().flush()
         webView.stopLoading()
         webView.destroy()
@@ -134,8 +139,11 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
     // A-08：所有 tab 入口共用（Home 底栏 + 设置页底栏），先记意图再加载；
     // 已在该 tab 时重复点击不重载（保留页面内容与表单）
     fun navigateTab(index: Int) {
+        // A-08 回归修复：用“旧意图”判定是否已在目标 tab——登录页（member.php）上
+        // activeTab 会回退到 intendedTab，若先写新意图会让任意 tab 都被当成“当前”而拒载
+        val alreadyThere = activeTab(state.currentUrl, state.intendedTab) == index
         state.intendedTab = index
-        if (activeTab(state.currentUrl, index) == index) return
+        if (alreadyThere) return
         tabUrl(index)?.let { webView.loadUrl(it) }
     }
 
@@ -170,7 +178,8 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
         state.webThemeEnabled = webTheme
         webView.setBackgroundColor(colorScheme.background.toArgb())
         state.pageThemeJs = ThemeInjector.applyScript() + "\n" + ThemeInjector.applyCall(colorScheme)
-        state.earlyBgJs = ThemeInjector.earlyBgJs(colorScheme)
+        // AR-05：earlyBg 受开关门控——关闭后 onPageStarted 不再注入底色
+        state.earlyBgJs = if (webTheme) ThemeInjector.earlyBgJs(colorScheme) else ""
         val js = if (webTheme) state.pageThemeJs else ThemeInjector.removeCall()
         webView.evaluateJavascript(js, null)
     }
@@ -188,11 +197,18 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
             )
         }
         composable("news") {
+            val context = LocalContext.current
             NewsScreen(
                 onBack = { navController.popBackStack() },
                 onOpenLink = { url ->
                     navController.popBackStack()
-                    webView.loadUrl(url)
+                    // AR-01：资讯详情与其他 loadUrl 入口同一分流——bbs 域内壳内浏览，
+                    // 域外（mag1 等）交系统浏览器，不进带桥的 WebView
+                    when (UrlRules.classify(url)) {
+                        is UrlRules.Verdict.Internal ->
+                            webView.loadUrl(UrlRules.normalizeInternal(url))
+                        else -> state.externalLink = url
+                    }
                 },
             )
         }

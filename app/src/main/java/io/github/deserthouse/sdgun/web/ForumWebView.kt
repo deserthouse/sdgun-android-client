@@ -52,6 +52,10 @@ class WebState {
     var navGeneration: Int = 0
         internal set
 
+    /** WebView 已销毁（A-02 残余）：onDestroy 置位，一切异步回调此后丢弃 */
+    var destroyed: Boolean = false
+        internal set
+
     /** 深链计数（A-08）：handleViewIntent 消费论坛深链后递增，
      *  UI 层据此把路由切回 home（否则内容在 WebView 里加载而路由停在设置页）。 */
     var deepLinkTick by mutableIntStateOf(0)
@@ -146,10 +150,13 @@ fun createForumWebView(
     startUrl: String? = UrlRules.HOME,
 ): WebView {
     val wv = WebView(context)
-    // AF-03：图片点击 → 原生查看器的正式桥（仅暴露图组 JSON 解析，见 GalleryBridge）
-    wv.addJavascriptInterface(GalleryBridge(state), "sdgGallery")
-    // AF-02 方案 A：列表增强回填通道（回调在主线程 evaluate 进 WebView）
-    wv.addJavascriptInterface(EnrichBridge { js -> wv.post { wv.evaluateJavascript(js, null) } }, "sdgEnrich")
+    // AF-03/AF-02：桥按导航域装卸（AR-01）——仅在 bbs 家族页面挂载；
+    // mag1 等域外页面导航开始即摘除，页面加载时不再注入任何桥对象
+    val galleryBridge = GalleryBridge(state)
+    val enrichBridge = EnrichBridge(state) { js -> wv.post { wv.evaluateJavascript(js, null) } }
+    var bridgesAttached = true
+    wv.addJavascriptInterface(galleryBridge, "sdgGallery")
+    wv.addJavascriptInterface(enrichBridge, "sdgEnrich")
     return wv.apply {
         @Suppress("SetJavaScriptEnabled")
         settings.apply {
@@ -209,6 +216,18 @@ fun createForumWebView(
                     view.loadUrl(UrlRules.HOME)
                     return
                 }
+                // AR-01：桥按域装卸——离开 bbs 家族（如资讯详情 mag1 域）即摘除，
+                // 域外页面加载后 window 上不存在任何桥对象
+                val onBbs = Uri.parse(url).host?.let { it == "bbs.sdgun.com.cn" || it.endsWith(".sdgun.com.cn") } == true
+                if (!onBbs && bridgesAttached) {
+                    view.removeJavascriptInterface("sdgGallery")
+                    view.removeJavascriptInterface("sdgEnrich")
+                    bridgesAttached = false
+                } else if (onBbs && !bridgesAttached) {
+                    view.addJavascriptInterface(galleryBridge, "sdgGallery")
+                    view.addJavascriptInterface(enrichBridge, "sdgEnrich")
+                    bridgesAttached = true
+                }
                 // S-3：保留旧标题直到 onPageFinished 覆写，消除导航间标题闪烁
                 syncNavigationState(view, url)
             }
@@ -241,8 +260,11 @@ fun createForumWebView(
                     view.evaluateJavascript(state.pageThemeJs, null)
                     // 注入脚本会把 <title> 换成页面自身的干净名称（站方标题是"品牌+板块+标题+SEO串"的拼接体）。
                     // 观察器的回写不触发 onReceivedTitle，故此处主动回读一次拿最终值。
+                    val genTitle = state.navGeneration
                     scheduleDelayed(view, 1200) {
                         view.evaluateJavascript("document.title") { result ->
+                            // A-02 残余：evaluateJavascript 的结果回调同样晚于导航可达，需再校验
+                            if (state.destroyed || state.navGeneration != genTitle) return@evaluateJavascript
                             val t = runCatching {
                                 org.json.JSONTokener(result).nextValue() as? String
                             }.getOrNull()
@@ -253,8 +275,10 @@ fun createForumWebView(
                 // 空壳探测（批次 A / A-07 收紧）：仅论坛首页判定（isForumlistUrl 把门，
                 // 板块页的空子版块区不参与）；服务器 200 但只回骨架时网络层无错误、覆盖层不触发。
                 if (url != null && state.loadError == null && isForumlistUrl(url)) {
+                    val genProbe = state.navGeneration
                     scheduleDelayed(view, 2500) {
                         view.evaluateJavascript(SHELL_PROBE_JS) { r ->
+                            if (state.destroyed || state.navGeneration != genProbe) return@evaluateJavascript
                             if (shellVerdict(r) && state.loadError == null) {
                                 state.loadError = "服务器只回了个空壳，内容没跟上"
                                 state.loadErrorRaw = "HTTP 200 · empty shell (.sub_forum without links)"
@@ -270,7 +294,7 @@ fun createForumWebView(
             private fun scheduleDelayed(view: WebView, delayMs: Long, task: () -> Unit) {
                 val gen = state.navGeneration
                 view.postDelayed({
-                    if (state.navGeneration != gen) return@postDelayed
+                    if (state.destroyed || state.navGeneration != gen) return@postDelayed
                     runCatching { task() }
                 }, delayMs)
             }

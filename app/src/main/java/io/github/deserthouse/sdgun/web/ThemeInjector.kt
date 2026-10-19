@@ -71,10 +71,14 @@ object ThemeInjector {
             "window.SDG_HIDE=" + jsString(ThemeRules.HIDE) + ";" +
             "window.SDG_ANCHORS=" + jsString(CONTENT_ANCHORS) + ";" +
             "(function(){ if (window.SDG_APPLY) return;" +
+            " window.SDG_ACTIVE = false;" +
             " window.SDG_ENSURE = function(id, css) { var el = document.getElementById(id);" +
             "  if (!el) { el = document.createElement('style'); el.id = id; document.head.appendChild(el); }" +
             "  el.textContent = css; };" +
+            // AR-05：三个监听器在 IIFE 内一次性定义+绑定（引用永久稳定，永不摘除），
+            // 生效性由 SDG_ACTIVE 令牌门控——disable 置 false 即全体惰性，重开置 true 即恢复。
             " window.SDG_IMG_RETRY = function(e) {" +
+            "  if (!window.SDG_ACTIVE) return;" +
             "  var a = e.target && e.target.closest ? e.target.closest('a') : null; if (!a) return;" +
             "  var imgs = a.querySelectorAll('img'); var broken = false;" +
             "  for (var i = 0; i < imgs.length; i++) if (imgs[i].naturalWidth === 0) broken = true;" +
@@ -83,7 +87,31 @@ object ThemeInjector {
             "  for (var j = 0; j < imgs.length; j++) { if (imgs[j].naturalWidth === 0) {" +
             "   var src = imgs[j].src; imgs[j].src = 'about:blank';" +
             "   imgs[j].src = src + (src.indexOf('?') > -1 ? '&' : '?') + 'r=' + Date.now(); } } };" +
-            " if (!window.SDG_IMG_RETRY_BOUND) { document.addEventListener('click', window.SDG_IMG_RETRY, true); window.SDG_IMG_RETRY_BOUND = true; }" +
+            " document.addEventListener('click', window.SDG_IMG_RETRY, true);" +
+            " window.SDG_IMG_PH = 'data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22><rect width=%2248%22 height=%2248%22 rx=%2210%22 fill=%22%235a5d68%22 fill-opacity=%220.45%22/></svg>';" +
+            " window.SDG_IMG_FALLBACK = function(e) {" +
+            "   if (!window.SDG_ACTIVE) return;" +
+            "   var im = e.target;" +
+            "   if (!im || im.tagName !== 'IMG' || im.dataset.sdgPh || !im.closest('.bm')) return;" +
+            "   im.dataset.sdgPh = '1'; im.dataset.sdgOrig = im.src; im.src = window.SDG_IMG_PH; };" +
+            " document.addEventListener('error', window.SDG_IMG_FALLBACK, true);" +
+            " window.SDG_GALLERY_CLICK = function(e) {" +
+            "  if (!window.SDG_ACTIVE) return;" +
+            "  var im = e.target;" +
+            "  if (!im || im.tagName !== 'IMG') return;" +
+            "  var box = im.closest('.message, .pct, .t_f');" +
+            "  if (!box) return;" +
+            "  var imgs = Array.prototype.filter.call(box.querySelectorAll('img'), function(x){" +
+            "   var s = x.currentSrc || x.src; return s && s.indexOf('http') === 0 && x.naturalWidth > 1 && !x.closest('a'); });" +
+            "  if (imgs.length === 0) return;" +
+            "  var urls = []; var idx = 0;" +
+            "  for (var i = 0; i < imgs.length; i++) {" +
+            "   var s = imgs[i].currentSrc || imgs[i].src; urls.push(s);" +
+            "   if (imgs[i] === im) idx = i; }" +
+            "  if (window.sdgGallery && window.sdgGallery.open) {" +
+            "   e.preventDefault(); e.stopPropagation();" +
+            "   window.sdgGallery.open(JSON.stringify({urls: urls, index: idx})); } };" +
+            " document.addEventListener('click', window.SDG_GALLERY_CLICK, true);" +
             " window.SDG_CHIPS = function() {" +
             "  var groups = document.querySelectorAll('div[data-byginto]');" +
             "  if (groups.length === 0 || document.getElementById('sdg-chips')) return;" +
@@ -112,9 +140,8 @@ object ThemeInjector {
             "  Array.prototype.forEach.call(document.querySelectorAll('a[href*=\"mod=viewthread\"]'), function(a){" +
             "   var m = a.href.match(/[?&]tid=(\\d+)/); if (!m) return;" +
             "   var row = a.closest('.threadlist li, li, .plc_xin, .plc') || a.parentElement;" +
-            "   if (!row || row.dataset.sdgEn) return; row.dataset.sdgEn = '1';" +
-            "   var d = th[m[1]]; if (!d) return;" +
-            "   row.style.position = 'relative';" +
+            "   var d = th[m[1]]; if (!row || !d) return;" +
+            "   if (!row.dataset.sdgEn) { row.dataset.sdgEn = '1'; row.style.position = 'relative'; }" +
             "   if (d.a && !row.querySelector('img.sdg-avatar')) {" +
             "    var av = document.createElement('img'); av.src = d.a; av.className = 'sdg-avatar';" +
             "    av.style.cssText = 'position:absolute;left:6px;top:8px;width:40px;height:40px;border-radius:10px;object-fit:cover;background:var(--sdg-surface-variant);';" +
@@ -140,56 +167,48 @@ object ThemeInjector {
             // 监听器、sdg 标记类、fastpost 内联覆盖、破图占位、earlyBg 底色。
             // 只移除本实例持有的引用；站方后续自行改过的值不动。
             "  if (!enabled) {" +
-            "   ['sdg-vars','sdg-rules','sdg-hide','sdg-chips'].forEach(function(id){" +
+            "   window.SDG_ACTIVE = false;" +
+            "   ['sdg-vars','sdg-rules','sdg-hide','sdg-chips','sdg-tools','sdg-recent'].forEach(function(id){" +
             "    var el = document.getElementById(id); if (el && el.parentNode) el.parentNode.removeChild(el); });" +
             "   document.body.classList.remove('sdg-home');" +
             "   if (window.SDG_TITLE_OBS) { try { window.SDG_TITLE_OBS.disconnect(); } catch(e){}" +
             "    window.SDG_TITLE_OBS = null; window.SDG_TITLE_TARGET = ''; }" +
-            "   if (window.SDG_IMG_RETRY) document.removeEventListener('click', window.SDG_IMG_RETRY, true);" +
-            "   if (window.SDG_IMG_FALLBACK) document.removeEventListener('error', window.SDG_IMG_FALLBACK, true);" +
-            "   if (window.SDG_GALLERY_CLICK) document.removeEventListener('click', window.SDG_GALLERY_CLICK, true);" +
-            "   window.SDG_IMG_RETRY_BOUND = false; window.SDG_IMG_FALLBACK_BOUND = false; window.SDG_GALLERY_BOUND = false;" +
             "   var ph = document.querySelectorAll('img[data-sdg-ph]');" +
             "   for (var i = 0; i < ph.length; i++) { if (ph[i].dataset.sdgOrig) ph[i].src = ph[i].dataset.sdgOrig;" +
             "    delete ph[i].dataset.sdgPh; delete ph[i].dataset.sdgOrig; }" +
             "   var ops = document.querySelectorAll('.plc.sdg-op');" +
             "   for (var j = 0; j < ops.length; j++) ops[j].classList.remove('sdg-op');" +
+            "   var enr = document.querySelectorAll('[data-sdgEn]');" +
+            "   for (var e2 = 0; e2 < enr.length; e2++) { var rw = enr[e2];" +
+            "    var avs = rw.querySelectorAll('img.sdg-avatar, img.sdg-cover, .sdg-zan');" +
+            "    for (var e3 = 0; e3 < avs.length; e3++) avs[e3].parentNode.removeChild(avs[e3]);" +
+            "    if (rw.dataset.sdgPos0 !== undefined) rw.style.position = rw.dataset.sdgPos0;" +
+            "    if (rw.dataset.sdgPad0 !== undefined) rw.style.paddingLeft = rw.dataset.sdgPad0;" +
+            "    delete rw.dataset.sdgEn; delete rw.dataset.sdgPos0; delete rw.dataset.sdgPad0; }" +
             "   var msg = document.getElementById('fastpostmessage');" +
             "   if (!msg) { var cands = document.querySelectorAll('textarea, input[type=text]');" +
             "    for (var m = 0; m < cands.length; m++) if ((cands[m].placeholder||'').indexOf('说') > -1) { msg = cands[m]; break; } }" +
             "   if (msg) { var bar = msg; for (var k = 0; k < 6 && bar; k++) {" +
             "    if (getComputedStyle(bar).position === 'fixed') break; bar = bar.parentElement; }" +
-            "    if (bar) { bar.style.removeProperty('background'); bar.style.removeProperty('border-top');" +
-            "     bar.style.removeProperty('backdrop-filter'); } }" +
-            "   document.documentElement.style.removeProperty('background');" +
+            "    if (bar && bar.dataset.sdgFp !== undefined) { var fp = bar.dataset.sdgFp.split('||');" +
+            "     var pr = ['background','border-top','backdrop-filter'];" +
+            "     for (var k2 = 0; k2 < 3; k2++) { if (fp[k2]) bar.style[pr[k2]] = fp[k2]; else bar.style.removeProperty(pr[k2]); }" +
+            "     delete bar.dataset.sdgFp; } }" +
+            "   var h = document.documentElement;" +
+            "   if (h.dataset.sdgHbg !== undefined) { if (h.dataset.sdgHbg) h.style.background = h.dataset.sdgHbg;" +
+            "    else h.style.removeProperty('background'); delete h.dataset.sdgHbg; }" +
             "   return 'REMOVED'; }" +
             "  if (document.querySelectorAll(window.SDG_ANCHORS).length === 0) return 'SKIP';" +
+            "  window.SDG_ACTIVE = true;" +
             "  window.SDG_ENSURE('sdg-vars', varsCss);" +
             "  window.SDG_ENSURE('sdg-rules', window.SDG_RULES);" +
             "  window.SDG_ENSURE('sdg-hide', window.SDG_HIDE);" +
-            // 关→开循环后监听器必须回归（A-05 往返验收）：绑定靠 _BOUND 标记幂等，
-            // 不能只在 applyScript 首次注入时绑——那会让重开后监听器永久缺失
-            "  if (window.SDG_IMG_RETRY && !window.SDG_IMG_RETRY_BOUND) { document.addEventListener('click', window.SDG_IMG_RETRY, true); window.SDG_IMG_RETRY_BOUND = true; }" +
-            "  if (window.SDG_IMG_FALLBACK && !window.SDG_IMG_FALLBACK_BOUND) { document.addEventListener('error', window.SDG_IMG_FALLBACK, true); window.SDG_IMG_FALLBACK_BOUND = true; }" +
-            "  if (!document.documentElement.style.background) document.documentElement.style.background = 'var(--sdg-surface-variant)';" +
-            // AF-03：帖子正文图片点击 → 收集可见图组 → 原生查看器（委托绑定，img 上打标防重复）
-            // 容器：bygsjw 触屏版正文=.message（装机实证），.pct/.t_f 兼容标准 Discuz 形态
-            "  window.SDG_GALLERY_CLICK = function(e) {" +
-            "  var im = e.target;" +
-            "  if (!im || im.tagName !== 'IMG') return;" +
-            "  var box = im.closest('.message, .pct, .t_f');" +
-            "  if (!box) return;" +
-            "  var imgs = Array.prototype.filter.call(box.querySelectorAll('img'), function(x){" +
-            "   var s = x.currentSrc || x.src; return s && s.indexOf('http') === 0 && x.naturalWidth > 1 && !x.closest('a'); });" +
-            "  if (imgs.length === 0) return;" +
-            "  var urls = []; var idx = 0;" +
-            "  for (var i = 0; i < imgs.length; i++) {" +
-            "   var s = imgs[i].currentSrc || imgs[i].src; urls.push(s);" +
-            "   if (imgs[i] === im) idx = i; }" +
-            "  if (window.sdgGallery && window.sdgGallery.open) {" +
-            "   e.preventDefault(); e.stopPropagation();" +
-            "   window.sdgGallery.open(JSON.stringify({urls: urls, index: idx})); } };" +
-            "  if (!window.SDG_GALLERY_BOUND) { document.addEventListener('click', window.SDG_GALLERY_CLICK, true); window.SDG_GALLERY_BOUND = true; }" +
+            // AR-05：监听器在 IIFE 一次性绑定并受 SDG_ACTIVE 门控——enable 只置令牌，
+            // disable 只清令牌；引用永不重建（复审复现的摘新留旧问题从结构上消除）
+            "  if (!document.documentElement.dataset.sdgHbg) {" +
+            "   document.documentElement.dataset.sdgHbg = document.documentElement.style.background || '';" +
+            "   document.documentElement.style.background = 'var(--sdg-surface-variant)'; }" +
+            "  var msg = document.getElementById('fastpostmessage');" +
             // AF-02 方案 A：板块页列表增强——收集行 tid 上报原生（拉 forumView 游客数据），回填头像/封面/点赞
             "  if (location.href.indexOf('mod=forumdisplay') > -1 && window.sdgEnrich) {" +
             "   var seen = {}; var tids = [];" +
@@ -197,7 +216,7 @@ object ThemeInjector {
             "    var m = a.href.match(/[?&]tid=(\\d+)/); if (!m || seen[m[1]]) return; seen[m[1]] = 1; tids.push(m[1]); });" +
             "   if (tids.length > 0) {" +
             "    var fmatch = location.href.match(/[?&]fid=(\\d+)/);" +
-            "    if (fmatch) window.sdgEnrich.enrich(JSON.stringify({fid: parseInt(fmatch[1]), tids: tids.slice(0, 60)}));" +
+            "    if (fmatch) window.sdgEnrich.enrich(JSON.stringify({fid: parseInt(fmatch[1]), tids: tids.slice(0, 60)}), true, location.href);" +
             "   }" +
             "  }" +
             // AF-05：板块页工具行——搜本板块 / 发帖（真实页面链接）
@@ -220,6 +239,8 @@ object ThemeInjector {
             "   for (var i = 0; i < cands.length; i++) if ((cands[i].placeholder||'').indexOf('说') > -1) { msg = cands[i]; break; } }" +
             "  if (msg) { var bar = msg; for (var k = 0; k < 6 && bar; k++) {" +
             "   if (getComputedStyle(bar).position === 'fixed') break; bar = bar.parentElement; }" +
+            "   if (bar && !bar.dataset.sdgFp) {" +
+            "    bar.dataset.sdgFp = [bar.style.background||'', bar.style.borderTop||'', bar.style.backdropFilter||''].join('||'); }" +
             "   if (bar) { bar.style.background = 'var(--sdg-surface)';" +
             "    bar.style.borderTop = '1px solid var(--sdg-outline-variant)';" +
             "    bar.style.backdropFilter = 'none'; } }" +
@@ -250,16 +271,35 @@ object ThemeInjector {
             "     else document.body.insertBefore(bar2, document.body.firstChild);" +
             "    } } catch(e4) {}" +
             "  }" +
-            // AF-04：楼主身份按作者判定（位置打标在广告/置顶楼层会错标）——首楼作者的所有楼层都带 OP 标记
+            // AF-04/AR-04：楼主身份按“首楼证据”判定——仅当前页含 post_number=1 的楼层
+            // （或 URL 无 page 参数即第一页）时取其作者为 owner（UID 优先，显示名回退）；
+            // owner 按 tid 存 sessionStorage，翻页/追加复用不重定义；证据不足一律不标。
             "  if (location.href.indexOf('mod=viewthread') > -1) {" +
-            "   var fl = document.querySelectorAll('.postlist .plc:not(.plc_xin)');" +
-            "   var author0 = '';" +
-            "   if (fl.length > 0) { var a0 = fl[0].querySelector('.authi a');" +
-            "    if (a0) author0 = (a0.textContent || '').trim(); }" +
-            "   for (var oi = 0; oi < fl.length; oi++) {" +
-            "    var ai = fl[oi].querySelector('.authi a');" +
-            "    if (ai && author0 && (ai.textContent || '').trim() === author0) fl[oi].classList.add('sdg-op');" +
-            "   } }" +
+            "   var pm = location.href.match(/[?&]page=(\\d+)/);" +
+            "   var firstPage = !(pm && parseInt(pm[1]) > 1);" +
+            "   var tidm = location.href.match(/[?&]tid=(\\d+)/);" +
+            "   var tidKey = tidm ? tidm[1] : location.href;" +
+            "   var own = null;" +
+            "   try { own = JSON.parse(sessionStorage.getItem('sdgOwner') || 'null'); } catch(e5) {}" +
+            "   if (own && own.tid !== tidKey) own = null;" +
+            "   if (!own && firstPage) {" +
+            "    var fls = document.querySelectorAll('.postlist .plc:not(.plc_xin)');" +
+            "    for (var fi = 0; fi < fls.length; fi++) {" +
+            "     var pn = fls[fi].querySelector('.post_number');" +
+            "     if (!pn || pn.textContent.replace(/[^0-9]/g, '') !== '1') continue;" +
+            "     var al = fls[fi].querySelector('.authi a[href*=\"uid=\"]') || fls[fi].querySelector('.authi a');" +
+            "     if (al) { var um = (al.getAttribute('href') || '').match(/uid=(\\d+)/);" +
+            "      own = {tid: tidKey, name: (al.textContent || '').trim(), uid: um ? um[1] : ''};" +
+            "      try { sessionStorage.setItem('sdgOwner', JSON.stringify(own)); } catch(e6) {}" +
+            "      break; } } }" +
+            "   if (own && own.name) {" +
+            "    var fl2 = document.querySelectorAll('.postlist .plc:not(.plc_xin)');" +
+            "    for (var oi = 0; oi < fl2.length; oi++) {" +
+            "     var ai = fl2[oi].querySelector('.authi a[href*=\"uid=\"]') || fl2[oi].querySelector('.authi a');" +
+            "     if (!ai) continue;" +
+            "     var um2 = (ai.getAttribute('href') || '').match(/uid=(\\d+)/);" +
+            "     var isOp = own.uid && um2 ? um2[1] === own.uid : (ai.textContent || '').trim() === own.name;" +
+            "     if (isOp) fl2[oi].classList.add('sdg-op'); } } }" +
             // 原生栏标题取页面自身 DOM（站方 <title> 是"品牌+板块+标题+SEO 串"的拼接体，读起来糊成一团）
             "  var ttl = '';" +
             "  if (location.href.indexOf('mod=viewthread') > -1) {" +

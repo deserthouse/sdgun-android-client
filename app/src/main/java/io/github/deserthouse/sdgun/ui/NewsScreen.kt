@@ -59,26 +59,61 @@ fun NewsScreen(
     var loading by remember { mutableStateOf(items.isEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
     var attempt by remember { mutableIntStateOf(0) }
+    var stale by remember { mutableStateOf(false) }
+    var endReached by remember { mutableStateOf(false) }
+    var loadingMore by remember { mutableStateOf(false) }
+    var nextPage by remember { mutableIntStateOf(2) }
 
+    // AR-08：首拉仅一页；失败时保留旧缓存数据（stale 横幅）而非清空
     LaunchedEffect(attempt) {
-        if (items.isNotEmpty()) return@LaunchedEffect
+        if (attempt == 0 && items.isNotEmpty()) return@LaunchedEffect
         loading = true
         error = null
-        val fetched = loadNews()
+        val fetched = loadNews(1, 1)
         if (fetched != null) {
-            items = fetched
-            NewsRepository.putCache(1, fetched)
+            val merged = LinkedHashMap<Long, NewsItem>()
+            items.forEach { merged[it.id] = it }
+            fetched.forEach { merged[it.id] = it }
+            items = merged.values.toList()
+            NewsRepository.putCache(1, items)
+            stale = false
         } else {
-            error = "资讯拉取失败（服务器或网络波动）"
+            stale = items.isNotEmpty()
+            error = if (items.isEmpty()) "资讯拉取失败（服务器或网络波动）" else "刷新失败，显示的是缓存内容"
         }
         loading = false
+    }
+
+    // AR-08：滚动到底触发 load-more（单频道 cat_id=1；返回空列表即结束）
+    fun loadMore() {
+        if (loadingMore || endReached || loading) return
+        loadingMore = true
+        val page = nextPage
+        Thread {
+            val fetched = loadNews(page, 1)
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                loadingMore = false
+                if (fetched == null || fetched.isEmpty()) {
+                    endReached = true
+                } else {
+                    val merged = LinkedHashMap<Long, NewsItem>()
+                    items.forEach { merged[it.id] = it }
+                    var added = false
+                    fetched.forEach { if (merged.put(it.id, it) == null) added = true }
+                    if (added) {
+                        items = merged.values.toList()
+                        nextPage = page + 1
+                    } else endReached = true
+                }
+            }
+        }.start()
     }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.surface,
         topBar = {
             TopAppBar(
-                title = { Text("资讯") },
+                title = { Text("资讯 · 频道 1") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
@@ -104,23 +139,35 @@ fun NewsScreen(
                     items(items, key = { it.id }) { item ->
                         NewsCard(item) { onOpenLink(item.link) }
                     }
+                    item {
+                        Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                            when {
+                                loadingMore -> CircularProgressIndicator(Modifier.size(22.dp))
+                                endReached -> Text(
+                                    "已加载全部资讯（频道 1）",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                else -> androidx.compose.material3.TextButton(onClick = { loadMore() }) {
+                                    Text("加载更多")
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 }
 
-/** 工作线程拉取（复用 Gallery 加载器线程池纪律：独立小池+主线程回传由调用方处理） */
-private suspend fun loadNews(): List<NewsItem>? =
-    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-        val out = ArrayList<NewsItem>()
-        for (url in NewsRepository.pageUrls(1, 1, NewsRepository.MAX_PAGES_PER_REQUEST)) {
-            val body = fetchNews(url) ?: break
-            val parsed = NewsRepository.parseNewsList(body)
-            out.addAll(parsed)
-        }
-        out.ifEmpty { null }
+private fun loadNews(page: Int, count: Int): List<NewsItem>? {
+    val out = ArrayList<NewsItem>()
+    for (url in NewsRepository.pageUrls(1, page, count)) {
+        val body = fetchNews(url) ?: break
+        out.addAll(NewsRepository.parseNewsList(body))
     }
+    return out.ifEmpty { null }
+}
 
 private fun fetchNews(url: String): String? = runCatching {
     val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
@@ -182,7 +229,7 @@ private fun NewsCard(item: NewsItem, onClick: () -> Unit) {
 private fun NewsCover(url: String, modifier: Modifier) {
     var bmp by remember(url) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(url) {
-        GalleryBitmapLoader.load(url, { bmp = it }, {})
+        GalleryBitmapLoader.load(url, 0, { bmp = it }, {})
     }
     Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant)) {
         bmp?.let {

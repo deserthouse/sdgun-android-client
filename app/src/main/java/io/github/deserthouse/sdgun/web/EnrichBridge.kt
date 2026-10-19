@@ -16,6 +16,7 @@ import java.util.concurrent.Executors
  * 与 GalleryBridge 同纪律：单方法、只解析有界 JSON、无凭据读取、不写 Cookie。
  */
 class EnrichBridge(
+    private val state: WebState,
     private val evaluateOnUi: (String) -> Unit,
 ) {
 
@@ -24,26 +25,35 @@ class EnrichBridge(
     private val pool: java.util.concurrent.ExecutorService by lazy { Executors.newSingleThreadExecutor() }
 
     @JavascriptInterface
-    fun enrich(payload: String?) {
+    fun enrich(payload: String?, themeEnabled: Boolean, pageUrl: String?) {
         val req = parseRequest(payload) ?: return
+        val page = pageUrl ?: return
         pool.execute {
+            // AR-06/AR-05：全命中零请求；快照 enabled+页 URL，回填前校验（页面已切换/主题已关则丢弃）
             val cached = ForumRepository.cached(req.fid)
+            val allHit = cached != null && req.tids.all { cached.containsKey(it) }
             val merged = HashMap(cached ?: emptyMap())
-            val startPage = if (cached != null) 2 else 1
-            for (url in ForumRepository.pageUrls(req.fid, startPage, ForumRepository.MAX_PAGES_PER_REQUEST)) {
-                val body = fetch(url) ?: break
-                val (parsed, totalPages) = ForumRepository.parseForumView(body)
-                merged.putAll(parsed)
-                // 分页终点以服务端 total_page 为准（不按 rows.length 猜）
-                val page = Regex("[?&]p=(\\d+)").find(url)?.groupValues?.get(1)?.toIntOrNull() ?: 1
-                if (totalPages in 1 until page) break
-                if (req.tids.all { merged.containsKey(it) }) break
+            if (!allHit) {
+                val startPage = if (cached != null) 2 else 1
+                for (url in ForumRepository.pageUrls(req.fid, startPage, ForumRepository.MAX_PAGES_PER_REQUEST)) {
+                    val body = fetch(url) ?: break
+                    val (parsed, totalPages) = ForumRepository.parseForumView(body)
+                    merged.putAll(parsed)
+                    // 分页终点以服务端 total_page 为准（不按 rows.length 猜）
+                    val page = Regex("[?&]p=(\\d+)").find(url)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+                    if (totalPages in 1 until page) break
+                    if (req.tids.all { merged.containsKey(it) }) break
+                }
+                // 失败/空结果不写缓存时间戳（不冒充有效缓存）
+                if (merged.isNotEmpty()) ForumRepository.putCache(req.fid, merged)
             }
-            ForumRepository.putCache(req.fid, merged)
             val matched = req.tids.mapNotNull { t -> merged[t]?.let { t to it } }.toMap()
             if (matched.isEmpty()) return@execute
             val payloadOut = buildEnrichJson(matched)
-            main.post { evaluateOnUi("if (window.SDG_ENRICH_APPLY) SDG_ENRICH_APPLY($payloadOut)") }
+            main.post {
+                if (!themeEnabled || state.currentUrl != page) return@post
+                evaluateOnUi("if (window.SDG_ENRICH_APPLY) SDG_ENRICH_APPLY($payloadOut)")
+            }
         }
     }
 

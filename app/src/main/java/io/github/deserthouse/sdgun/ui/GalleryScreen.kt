@@ -55,8 +55,35 @@ object GalleryBitmapLoader {
     }
     private val pool = Executors.newFixedThreadPool(3)
     private val main = Handler(Looper.getMainLooper())
+    private const val MAX_DIMEN = 2048
 
-    fun load(url: String, onReady: (Bitmap) -> Unit, onError: () -> Unit) {
+    /** AR-03：按目标尺寸采样解码（先读 bounds 再整图），限制瞬时像素分配 */
+    private fun decodeSampled(stream: java.io.InputStream, outW: Int, outH: Int): Bitmap? {
+        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        val head = stream.readBytes()
+        BitmapFactory.decodeByteArray(head, 0, head.size, opts)
+        var sample = 1
+        if (opts.outWidth > outW || opts.outHeight > outH) {
+            var w = opts.outWidth
+            var h = opts.outHeight
+            while (w / 2 >= outW && h / 2 >= outH) {
+                sample *= 2
+                w /= 2
+                h /= 2
+            }
+        }
+        val opts2 = BitmapFactory.Options().apply {
+            inSampleSize = sample
+            inPreferredConfig = Bitmap.Config.RGB_565
+        }
+        return BitmapFactory.decodeByteArray(head, 0, head.size, opts2)
+    }
+
+    /**
+     * AR-03：reqId=请求代次（同一 URL 快速翻页时旧任务回调被丢弃）；
+     * 响应体上限 12MB 防异常大图；显式 disconnect。
+     */
+    fun load(url: String, reqId: Int, onReady: (Bitmap) -> Unit, onError: () -> Unit) {
         cache.get(url)?.let { onReady(it); return }
         pool.execute {
             val bmp = runCatching {
@@ -64,7 +91,30 @@ object GalleryBitmapLoader {
                 conn.connectTimeout = 15000
                 conn.readTimeout = 20000
                 conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 16) Chrome/130.0.0.0 Mobile Safari/537.36")
-                conn.inputStream.use { BitmapFactory.decodeStream(it) }
+                try {
+                    conn.inputStream.use { stream ->
+                        val head = stream.readBytes()
+                        if (head.size > 12 * 1024 * 1024) return@use null
+                        // 两段式：先用头部探测尺寸（decodeByteArray 不消耗网络流）
+                        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        BitmapFactory.decodeByteArray(head, 0, head.size, opts)
+                        var sample = 1
+                        var w = opts.outWidth
+                        var h = opts.outHeight
+                        while (w / 2 >= 1024 && h / 2 >= 1024) {
+                            sample *= 2
+                            w /= 2
+                            h /= 2
+                        }
+                        val opts2 = BitmapFactory.Options().apply {
+                            inSampleSize = sample
+                            inPreferredConfig = Bitmap.Config.RGB_565
+                        }
+                        BitmapFactory.decodeByteArray(head, 0, head.size, opts2)
+                    }
+                } finally {
+                    conn.disconnect()
+                }
             }.getOrNull()
             main.post {
                 if (bmp != null) {
@@ -101,12 +151,12 @@ fun GalleryScreen(data: GalleryData, onClose: () -> Unit) {
                     .align(Alignment.TopEnd)
                     .padding(12.dp),
             ) {
-                Icon(Icons.Filled.Close, contentDescription = "关闭", tint = MaterialTheme.colorScheme.onSurface)
+                Icon(Icons.Filled.Close, contentDescription = "关闭", tint = androidx.compose.ui.graphics.Color(0xFFE6E9F2))
             }
             Text(
                 "${pagerState.currentPage + 1} / ${data.urls.size}",
                 style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = androidx.compose.ui.graphics.Color(0xFFE6E9F2),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(16.dp),
@@ -115,18 +165,30 @@ fun GalleryScreen(data: GalleryData, onClose: () -> Unit) {
     }
 }
 
+/** 图片页加载状态机（AR-02）：三态互斥，重试真实重新发起请求 */
+private enum class LoadState { LOADING, OK, FAILED }
+
 @Composable
 private fun GalleryPage(url: String) {
     var bmp by remember(url) { mutableStateOf<Bitmap?>(null) }
-    var failed by remember(url) { mutableStateOf(false) }
+    var state by remember(url) { mutableStateOf(LoadState.LOADING) }
     var attempt by remember(url) { mutableIntStateOf(0) }
     var scale by remember(url) { mutableStateOf(1f) }
     var offset by remember(url) { mutableStateOf(Offset.Zero) }
 
     LaunchedEffect(url, attempt) {
-        if (bmp == null && !failed) {
-            GalleryBitmapLoader.load(url, { bmp = it }, { failed = true })
-        }
+        if (state == LoadState.OK) return@LaunchedEffect
+        state = LoadState.LOADING
+        val req = attempt
+        // AR-03：reqId 随 attempt 递增——快速翻页后旧任务的回调因代次不符被丢弃
+        GalleryBitmapLoader.load(url, req, { b ->
+            if (req == attempt) {
+                bmp = b
+                state = LoadState.OK
+            }
+        }, {
+            if (req == attempt) state = LoadState.FAILED
+        })
     }
 
     Box(
@@ -155,7 +217,7 @@ private fun GalleryPage(url: String) {
                         }
                     },
             )
-            failed -> FailureHint(attempt) { attempt++ }
+            state == LoadState.FAILED -> FailureHint(attempt) { attempt++ }
             else -> CircularProgressIndicator()
         }
     }
@@ -164,7 +226,7 @@ private fun GalleryPage(url: String) {
 @Composable
 private fun FailureHint(attempt: Int, retry: () -> Unit) {
     androidx.compose.foundation.layout.Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("加载失败", color = MaterialTheme.colorScheme.onSurface)
+        Text("加载失败", color = androidx.compose.ui.graphics.Color(0xFFE6E9F2))
         androidx.compose.material3.TextButton(onClick = retry) { Text("重试") }
         if (attempt > 0) Text("已重试 $attempt 次", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
