@@ -182,6 +182,12 @@
           opacity: 0 !important;
           background: transparent !important;
         }
+        /* C7：登录按钮文字被裁——站方 .pnc 行高=按钮高，叠加注入 padding 后内容盒
+           被压缩（探针实证 h=49.46px lh=49.46px pad=8px 上下）。行高改随字号。 */
+        #loginform button.pnc {
+          height: auto !important;
+          line-height: 1.3 !important;
+        }
         /* 发帖页（站方 post 模板）：白底表单压暗——探针实证输入框 white bg + white color（白上白不可读）；表单为 #postform（id） */
         #postform {
           background: var(--sdg-surface) !important;
@@ -216,6 +222,24 @@
           background: var(--sdg-surface-variant) !important;
           color: var(--sdg-on-surface-variant) !important;
         }
+        /* C8：首页分组折叠钮是 .subforumshow::after 伪元素画的圆圈，站方固定浅灰白
+           （rgb 227,226,233）——浅色主题下融白底不可见。改随主题变量自动切换。 */
+        .subforumshow.bm_xin::after {
+          color: var(--sdg-on-surface-variant) !important;
+          border-color: var(--sdg-on-surface-variant) !important;
+        }
+        /* C9b：版头横幅 83px 固定高 + overflow:hidden 在 140% 字号下裁掉标题。
+           改随内容生长，保留横幅最低高度；标题元素自身 25px 固定盒同样裁切，一并放行。 */
+        .sidenav-brand {
+          height: auto !important;
+          min-height: 64px !important;
+          overflow: visible !important;
+        }
+        .sidenav-brand p, .sidenav-brand h1, .sidenav-brand h2 {
+          height: auto !important;
+          overflow: visible !important;
+        }
+        /* C9a：版头"点击重新加载"（.error_text）恒定浅字叠恒暗遮罩，明暗皆可读，不动。 */
         /* 首页：原生顶栏 + 分组 chips 已完全覆盖站方固定头（#byg_header 内 .hdc_xin 53px 红条）——
            隐藏之并收掉 .header_xin 为其预留的 padding-bottom（.93rem），消除空灰带与红色残边 */
         body.sdg-home .header_xin { padding-bottom: 0 !important; }
