@@ -1,6 +1,6 @@
-package io.github.deserthouse.sdgun.ui
-
+package io.github.deserthouse.sdgun.feature.settings
 import androidx.compose.foundation.layout.Arrangement
+import io.github.deserthouse.sdgun.core.designsystem.AppBottomBar
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -33,7 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import io.github.deserthouse.sdgun.BuildConfig
-import io.github.deserthouse.sdgun.data.AppPrefs
+import io.github.deserthouse.sdgun.data.repository.AppPrefs
 import kotlinx.coroutines.flow.StateFlow
 
 @OptIn(ExperimentalMaterial3Api::class)

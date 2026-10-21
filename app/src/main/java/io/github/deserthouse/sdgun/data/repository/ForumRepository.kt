@@ -1,5 +1,4 @@
-package io.github.deserthouse.sdgun.data
-
+package io.github.deserthouse.sdgun.data.repository
 import org.json.JSONArray
 import org.json.JSONObject
 

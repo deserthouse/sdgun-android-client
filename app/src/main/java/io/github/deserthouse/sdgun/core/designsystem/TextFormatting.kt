@@ -1,5 +1,4 @@
-package io.github.deserthouse.sdgun.ui
-
+package io.github.deserthouse.sdgun.core.designsystem
 /** 剥掉 Discuz 标题的模板长尾与站方 SEO 关键词串，只留页面主体（含 "-  手机版" 双空格变体） */
 internal fun prettyTitle(raw: String): String {
     // 前缀品牌名只在"站方关键词串"确实存在时才剥——避免误伤真正的帖子标题（如 "SDGun水弹枪测评"）

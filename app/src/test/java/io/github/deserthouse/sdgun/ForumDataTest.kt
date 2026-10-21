@@ -1,6 +1,7 @@
 package io.github.deserthouse.sdgun
 
-import io.github.deserthouse.sdgun.data.ForumRepository
+import io.github.deserthouse.sdgun.data.repository.ForumRepository
+import io.github.deserthouse.sdgun.data.repository.ThreadSummary
 import io.github.deserthouse.sdgun.web.EnrichBridge
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -63,7 +64,7 @@ class ForumDataTest {
 
     @Test
     fun `enrich json round-trips fields`() {
-        val s = io.github.deserthouse.sdgun.data.ThreadSummary(
+        val s = io.github.deserthouse.sdgun.data.repository.ThreadSummary(
             tid = 1, title = "t", author = "a", avatarUrl = "http://x/av.jpg",
             coverUrls = listOf("http://x/c.jpg"), applauseCount = 7, lastPostText = null,
         )

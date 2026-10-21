@@ -1,6 +1,7 @@
-package io.github.deserthouse.sdgun.ui
-
+package io.github.deserthouse.sdgun.feature.media
 import android.graphics.Bitmap
+import io.github.deserthouse.sdgun.feature.media.computeSampleSize
+import io.github.deserthouse.sdgun.feature.media.GalleryBitmapLoader
 import android.graphics.BitmapFactory
 import android.os.Handler
 import android.os.Looper

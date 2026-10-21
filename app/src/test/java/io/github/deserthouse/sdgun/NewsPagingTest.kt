@@ -1,7 +1,7 @@
 package io.github.deserthouse.sdgun
 
-import io.github.deserthouse.sdgun.data.NewsItem
-import io.github.deserthouse.sdgun.data.NewsRepository
+import io.github.deserthouse.sdgun.data.repository.NewsItem
+import io.github.deserthouse.sdgun.data.repository.NewsRepository
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

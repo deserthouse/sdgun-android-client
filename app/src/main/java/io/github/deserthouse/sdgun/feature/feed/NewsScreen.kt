@@ -1,6 +1,8 @@
-package io.github.deserthouse.sdgun.ui
-
+package io.github.deserthouse.sdgun.feature.feed
 import android.graphics.Bitmap
+import io.github.deserthouse.sdgun.feature.media.GalleryBitmapLoader
+import io.github.deserthouse.sdgun.data.repository.NewsItem
+import io.github.deserthouse.sdgun.data.repository.NewsRepository
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -44,8 +46,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
-import io.github.deserthouse.sdgun.data.NewsItem
-import io.github.deserthouse.sdgun.data.NewsRepository
 import kotlinx.coroutines.launch
 
 /**

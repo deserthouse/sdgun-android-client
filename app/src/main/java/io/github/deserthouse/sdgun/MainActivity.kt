@@ -1,6 +1,15 @@
 package io.github.deserthouse.sdgun
 
 import android.content.BroadcastReceiver
+import io.github.deserthouse.sdgun.feature.settings.SettingsScreen
+import io.github.deserthouse.sdgun.feature.feed.NewsScreen
+import io.github.deserthouse.sdgun.feature.community.activeTab
+import io.github.deserthouse.sdgun.feature.community.HomeScreen
+import io.github.deserthouse.sdgun.feature.account.AccountScreen
+import io.github.deserthouse.sdgun.feature.account.LoginScreen
+import io.github.deserthouse.sdgun.core.designsystem.AppBottomBar
+import io.github.deserthouse.sdgun.core.network.SdApi
+import io.github.deserthouse.sdgun.data.repository.AppPrefs
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -26,16 +35,8 @@ import androidx.compose.ui.platform.LocalView
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import io.github.deserthouse.sdgun.data.AppPrefs
-import io.github.deserthouse.sdgun.ui.AppBottomBar
-import io.github.deserthouse.sdgun.ui.AccountScreen
-import io.github.deserthouse.sdgun.ui.HomeScreen
-import io.github.deserthouse.sdgun.ui.LoginScreen
-import io.github.deserthouse.sdgun.ui.activeTab
-import io.github.deserthouse.sdgun.ui.tabUrl
-import io.github.deserthouse.sdgun.ui.NewsScreen
-import io.github.deserthouse.sdgun.ui.SettingsScreen
-import io.github.deserthouse.sdgun.ui.theme.SDGunTheme
+import io.github.deserthouse.sdgun.core.designsystem.tabUrl
+import io.github.deserthouse.sdgun.core.designsystem.SDGunTheme
 import io.github.deserthouse.sdgun.web.ThemeInjector
 import io.github.deserthouse.sdgun.web.UrlRules
 import io.github.deserthouse.sdgun.web.WebState
@@ -54,6 +55,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        io.github.deserthouse.sdgun.core.network.SdApi.appContext = applicationContext
         state = WebState()
         val restored = savedInstanceState?.getBundle(KEY_WEB_STATE)
         // AV-01：WebView 必须 Activity Context——applicationContext 构建的实例缺窗口 token，
@@ -154,8 +156,13 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
         if (alreadyThere) return
         // R-A1：我的 tab 走原生（API 会话）——无 token 进登录页，有 token 进账号页；
         // 网页会员面（消息等）仍可经其他路径到达，渐进期共存
-        if (index == 2) {
+        if (index == 3) {
             navController.navigate(if (prefs.apiToken.value.isBlank()) "login" else "account")
+            return
+        }
+        if (index == 0) {
+            // G2 前：聚焦 tab 暂由资讯流承载（R-A2 原生首页替换）
+            navController.navigate("news")
             return
         }
         tabUrl(index)?.let { webView.loadUrl(it) }

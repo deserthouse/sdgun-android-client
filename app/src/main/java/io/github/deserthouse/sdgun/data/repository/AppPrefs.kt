@@ -1,6 +1,6 @@
-package io.github.deserthouse.sdgun.data
-
+package io.github.deserthouse.sdgun.data.repository
 import android.content.Context
+import io.github.deserthouse.sdgun.core.network.SdApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 

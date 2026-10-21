@@ -1,5 +1,4 @@
-package io.github.deserthouse.sdgun.ui.theme
-
+package io.github.deserthouse.sdgun.core.designsystem
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape

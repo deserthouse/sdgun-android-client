@@ -1,6 +1,6 @@
 package io.github.deserthouse.sdgun
 
-import io.github.deserthouse.sdgun.data.SdApi
+import io.github.deserthouse.sdgun.core.network.SdApi
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -43,11 +43,17 @@ class SdApiTest {
     }
 
     @Test
-    fun `rsa ciphertext shape is 172-char base64`() {
+    fun `password ciphertext carries android-Base64-DEFAULT line wraps`() {
+        // 2026-10-21 官方抓包定案：76 字符/行 + 行尾换行（无换行版本服务端解密失败）
         val ct = SdApi.encryptPassword("probe123")
-        assertTrue("len=${ct.length}", ct.length == 172)
-        assertTrue(ct.matches(Regex("^[A-Za-z0-9+/]+={0,2}$")))
-        // 同明文两次加密（PKCS1v15 随机填充）密文不同
+        val nl = Char(10).toString()
+        val lines = ct.split(nl)
+        assertTrue("must end with newline", ct.endsWith(nl))
+        assertEquals("172 chars -> 76+76+20", 3, lines.size - 1) // 末尾空串=结尾换行
+        assertEquals(76, lines[0].length)
+        assertEquals(76, lines[1].length)
+        assertEquals(20, lines[2].length)
+        lines.dropLast(1).forEach { l -> assertTrue(l.matches(Regex("^[A-Za-z0-9+/]+={0,2}$"))) }
         assertNotEquals(ct, SdApi.encryptPassword("probe123"))
     }
 

@@ -1,5 +1,4 @@
-package io.github.deserthouse.sdgun.ui
-
+package io.github.deserthouse.sdgun.compat.web
 import android.content.ClipData
 import android.content.Intent
 import android.net.Uri

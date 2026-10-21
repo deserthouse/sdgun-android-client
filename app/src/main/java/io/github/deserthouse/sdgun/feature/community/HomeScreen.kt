@@ -1,6 +1,12 @@
-package io.github.deserthouse.sdgun.ui
-
+package io.github.deserthouse.sdgun.feature.community
 import android.view.ViewGroup
+import io.github.deserthouse.sdgun.feature.media.GalleryScreen
+import io.github.deserthouse.sdgun.core.designsystem.prettyTitle
+import io.github.deserthouse.sdgun.feature.community.activeTab
+import io.github.deserthouse.sdgun.core.designsystem.ErrorOverlay
+import io.github.deserthouse.sdgun.compat.web.ExternalLinkDialog
+import io.github.deserthouse.sdgun.core.designsystem.AppBottomBar
+import io.github.deserthouse.sdgun.data.repository.AppPrefs
 import android.webkit.WebView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -56,7 +62,6 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
-import io.github.deserthouse.sdgun.data.AppPrefs
 import io.github.deserthouse.sdgun.web.UrlRules
 import io.github.deserthouse.sdgun.web.WebState
 

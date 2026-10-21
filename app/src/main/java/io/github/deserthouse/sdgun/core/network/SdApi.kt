@@ -1,5 +1,4 @@
-package io.github.deserthouse.sdgun.data
-
+package io.github.deserthouse.sdgun.core.network
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -59,20 +58,32 @@ object SdApi {
 
     fun userAgent(utdid: String, token: String?): String = "$WEB_UA ${magappxUa(utdid, token)}"
 
-    private fun rsaEncrypt(plain: String): String {
+    private fun rsaDoFinal(plain: ByteArray): ByteArray {
         val key = KeyFactory.getInstance("RSA")
             .generatePublic(X509EncodedKeySpec(java.util.Base64.getDecoder().decode(RSA_PUBKEY_B64)))
         val cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding")
         cipher.init(Cipher.ENCRYPT_MODE, key)
-        return java.util.Base64.getEncoder().encodeToString(cipher.doFinal(plain.toByteArray(Charsets.UTF_8)))
+        return cipher.doFinal(plain)
     }
 
-    /** 登录密码密文（与官方 App 逐位同构：Base64(RSA_PKCS1v15(明文))） */
-    fun encryptPassword(plain: String): String = rsaEncrypt(plain)
+    /**
+     * 登录密码密文（与官方 App 逐字节同构）。
+     * ★2026-10-21 官方抓包定案：MagRsaEncryptUtil 用 android.util.Base64.DEFAULT——
+     * 密文 base64 每 76 字符换行、结尾补 \n；无换行版本服务端解密失败并回
+     * "账号或密码错误"（真账号实测根因，非账号体系问题）。纯函数复刻 DEFAULT 语义。
+     */
+    fun encryptPassword(plain: String): String {
+        val b64 = java.util.Base64.getEncoder().encodeToString(
+            rsaDoFinal(plain.toByteArray(Charsets.UTF_8)),
+        )
+        return b64.chunked(76).joinToString("\n", postfix = "\n")
+    }
 
-    /** mag-ss-key 请求头值：Base64(RSA_PKCS1v15("{app_code},{unix秒}")) */
+    /** mag-ss-key 请求头值：Base64(RSA_PKCS1v15("{app_code},{unix秒}"))——官方为无换行单行 */
     fun magSsKey(nowSec: Long = System.currentTimeMillis() / 1000): String =
-        rsaEncrypt("$APP_CODE,$nowSec")
+        java.util.Base64.getEncoder().encodeToString(
+            rsaDoFinal("$APP_CODE,$nowSec".toByteArray(Charsets.UTF_8)),
+        )
 
     /** utdid 首次生成（22 位字母数字，客户端本地身份；服务端不校验真实性） */
     fun newUtdid(seed: Long): String {
@@ -90,6 +101,24 @@ object SdApi {
 
     class ApiResponse(val success: Boolean, val code: Int, val msg: String?, val raw: JSONObject?)
 
+    /**
+     * AVD 调试环境代理：guest 的 settings global http_proxy 只对浏览器/OkHttp 生效，
+     * HttpURLConnection 直连走 qemu slirip——本机 qemu 对外 socket 随机损坏（协议笔记
+     * 红线，relay_proxy 存在的原因），登录等 POST 会被截断成通用错误。读系统代理设置
+     * 显式走它；真机无 global proxy → 返回 null 走直连（真机不受影响）。
+     */
+    /** 宿主 Application context（MainActivity onCreate 注入，读系统代理设置用） */
+    @Volatile
+    internal var appContext: android.content.Context? = null
+
+    private fun avdProxy(): java.net.Proxy? = runCatching {
+        val resolver = appContext?.contentResolver ?: return null
+        val host = android.provider.Settings.Global.getString(resolver, "http_proxy") ?: return null
+        if (host.isBlank()) return null
+        val (h, p) = host.split(":").let { it[0] to (it.getOrNull(1)?.toIntOrNull() ?: 80) }
+        java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress(h, p))
+    }.getOrNull()
+
     private fun request(
         url: String,
         method: String,
@@ -97,7 +126,7 @@ object SdApi {
         utdid: String,
         token: String?,
     ): ApiResponse = withApiHeaders(utdid, token) { ua, ssKey ->
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+        val conn = (URL(url).openConnection(avdProxy()) as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 12000
             readTimeout = 15000
@@ -108,8 +137,13 @@ object SdApi {
             if (form != null) {
                 doOutput = true
                 setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-                outputStream.use { it.write(form.entries.joinToString("&")
-                    .replace(" ", "%20").toByteArray(Charsets.UTF_8)) }
+                // R-A1 真凭据定案：form 必须完整 URL 编码（URLEncoder：空格/换行/+/=
+                // 全部转义）——此前手工拼接只替换空格，中文账号与密文裸发即废
+                val encoded = form.entries.joinToString("&") {
+                    java.net.URLEncoder.encode(it.key, "UTF-8") + "=" +
+                        java.net.URLEncoder.encode(it.value, "UTF-8")
+                }
+                outputStream.use { it.write(encoded.toByteArray(Charsets.UTF_8)) }
             }
         }
         try {

@@ -1,5 +1,4 @@
-package io.github.deserthouse.sdgun.ui
-
+package io.github.deserthouse.sdgun.core.designsystem
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer

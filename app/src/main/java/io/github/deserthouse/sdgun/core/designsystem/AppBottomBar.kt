@@ -1,7 +1,8 @@
-package io.github.deserthouse.sdgun.ui
-
+package io.github.deserthouse.sdgun.core.designsystem
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Article
+import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Person
@@ -26,9 +27,10 @@ private data class TabSpec(
 )
 
 private val TABS = listOf(
-    TabSpec("首页", UrlRules.HOME, Icons.Filled.Forum, Icons.Outlined.Forum),
+    TabSpec("聚焦", null, Icons.Filled.Article, Icons.Outlined.Article),
+    TabSpec("社区", UrlRules.HOME, Icons.Filled.Forum, Icons.Outlined.Forum),
     TabSpec("消息", UrlRules.MESSAGES, Icons.Filled.Chat, Icons.Outlined.Chat),
-    TabSpec("我的", UrlRules.PROFILE, Icons.Filled.Person, Icons.Outlined.Person),
+    TabSpec("我的", null, Icons.Filled.Person, Icons.Outlined.Person),
 )
 
 /** 按 tab 序号取目标 URL（Home 的 onTab 回调用） */

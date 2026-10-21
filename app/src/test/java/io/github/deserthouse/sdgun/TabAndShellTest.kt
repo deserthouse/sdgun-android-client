@@ -1,6 +1,6 @@
 package io.github.deserthouse.sdgun
 
-import io.github.deserthouse.sdgun.ui.activeTab
+import io.github.deserthouse.sdgun.feature.community.activeTab
 import io.github.deserthouse.sdgun.web.GalleryBridge
 import io.github.deserthouse.sdgun.web.UrlRules
 import io.github.deserthouse.sdgun.web.isForumlistUrl

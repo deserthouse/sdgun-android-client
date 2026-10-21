@@ -1,6 +1,6 @@
 package io.github.deserthouse.sdgun
 
-import io.github.deserthouse.sdgun.data.NewsRepository
+import io.github.deserthouse.sdgun.data.repository.NewsRepository
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull

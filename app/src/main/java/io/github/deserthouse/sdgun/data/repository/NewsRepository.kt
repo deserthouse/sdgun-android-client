@@ -1,5 +1,4 @@
-package io.github.deserthouse.sdgun.data
-
+package io.github.deserthouse.sdgun.data.repository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject

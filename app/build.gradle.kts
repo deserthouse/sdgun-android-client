@@ -11,7 +11,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val APP_VERSION_NAME = "1.6.0"
+val APP_VERSION_NAME = "1.7.0"
 
 android {
     namespace = "io.github.deserthouse.sdgun"
@@ -21,7 +21,7 @@ android {
         applicationId = "io.github.deserthouse.sdgun"
         minSdk = 31
         targetSdk = 37
-        versionCode = 25
+        versionCode = 26
         versionName = APP_VERSION_NAME
     }
 
@@ -109,10 +109,10 @@ dependencies {
 
     // ━━━ Compose + Material 3 Expressive ━━━
     implementation(platform("androidx.compose:compose-bom:2025.06.00"))
+    implementation("androidx.compose.material3:material3:1.4.0")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     // Material 3 1.5+ includes Expressive APIs
-    implementation("androidx.compose.material3:material3:1.5.0-alpha22")
     implementation("androidx.compose.material:material-icons-extended")
 
     // ━━━ 下拉刷新（WebView 包 SwipeRefreshLayout，原生嵌套滚动判断） ━━━

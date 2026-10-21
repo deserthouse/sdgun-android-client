@@ -1,6 +1,6 @@
 package io.github.deserthouse.sdgun
 
-import io.github.deserthouse.sdgun.ui.prettyTitle
+import io.github.deserthouse.sdgun.core.designsystem.prettyTitle
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

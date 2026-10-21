@@ -1,6 +1,6 @@
 package io.github.deserthouse.sdgun
 
-import io.github.deserthouse.sdgun.ui.computeSampleSize
+import io.github.deserthouse.sdgun.feature.media.computeSampleSize
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

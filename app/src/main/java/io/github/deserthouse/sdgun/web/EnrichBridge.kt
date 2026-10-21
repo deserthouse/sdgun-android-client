@@ -1,10 +1,10 @@
 package io.github.deserthouse.sdgun.web
 
 import android.os.Handler
+import io.github.deserthouse.sdgun.data.repository.ForumRepository
+import io.github.deserthouse.sdgun.data.repository.ThreadSummary
 import android.os.Looper
 import android.webkit.JavascriptInterface
-import io.github.deserthouse.sdgun.data.ForumRepository
-import io.github.deserthouse.sdgun.data.ThreadSummary
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
