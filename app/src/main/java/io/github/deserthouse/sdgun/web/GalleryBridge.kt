@@ -23,7 +23,11 @@ class GalleryBridge(private val state: WebState) {
     @JavascriptInterface
     fun open(payload: String?) {
         val data = parseGalleryPayload(payload) ?: return
-        main.post { state.gallery = data }
+        main.post {
+            // AV-08：销毁后丢弃迟到的投递（onDestroy 置位 destroyed）
+            if (state.destroyed) return@post
+            state.gallery = data
+        }
     }
 
     companion object {

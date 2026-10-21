@@ -28,7 +28,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import io.github.deserthouse.sdgun.data.AppPrefs
 import io.github.deserthouse.sdgun.ui.AppBottomBar
+import io.github.deserthouse.sdgun.ui.AccountScreen
 import io.github.deserthouse.sdgun.ui.HomeScreen
+import io.github.deserthouse.sdgun.ui.LoginScreen
 import io.github.deserthouse.sdgun.ui.activeTab
 import io.github.deserthouse.sdgun.ui.tabUrl
 import io.github.deserthouse.sdgun.ui.NewsScreen
@@ -150,6 +152,12 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
         val alreadyThere = activeTab(state.currentUrl, state.intendedTab) == index
         state.intendedTab = index
         if (alreadyThere) return
+        // R-A1：我的 tab 走原生（API 会话）——无 token 进登录页，有 token 进账号页；
+        // 网页会员面（消息等）仍可经其他路径到达，渐进期共存
+        if (index == 2) {
+            navController.navigate(if (prefs.apiToken.value.isBlank()) "login" else "account")
+            return
+        }
         tabUrl(index)?.let { webView.loadUrl(it) }
     }
 
@@ -250,6 +258,22 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                     navController.popBackStack()
                     navigateTab(i)
                 },
+            )
+        }
+        composable("login") {
+            LoginScreen(
+                prefs = prefs,
+                onBack = { navController.popBackStack() },
+                onLoggedIn = {
+                    navController.popBackStack("home", inclusive = false)
+                    navController.navigate("account")
+                },
+            )
+        }
+        composable("account") {
+            AccountScreen(
+                prefs = prefs,
+                onBack = { navController.popBackStack() },
             )
         }
     }

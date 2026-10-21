@@ -258,12 +258,14 @@ private fun NewsCard(item: NewsItem, onClick: () -> Unit) {
 @Composable
 private fun NewsCover(url: String, modifier: Modifier) {
     var bmp by remember(url) { mutableStateOf<Bitmap?>(null) }
+    // C3：reqId 用 url 哈希——同 URL 多卡时 cancel 只摘自己的回调，不误伤他卡
+    val reqId = remember(url) { url.hashCode() }
     LaunchedEffect(url) {
         // AV-07：封面用 512 档目标（卡片缩略图不需要相册级精度）
-        GalleryBitmapLoader.load(url, 0, target = 512, { bmp = it }, {})
+        GalleryBitmapLoader.load(url, reqId, target = 512, onReady = { bmp = it }, onError = {})
     }
     DisposableEffect(url) {
-        onDispose { GalleryBitmapLoader.cancel(url, 0) }
+        onDispose { GalleryBitmapLoader.cancel(url, reqId, target = 512) }
     }
     Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant)) {
         bmp?.let {

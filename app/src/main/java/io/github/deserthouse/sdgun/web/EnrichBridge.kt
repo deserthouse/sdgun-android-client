@@ -24,8 +24,12 @@ class EnrichBridge(
     private val main: Handler by lazy { Handler(Looper.getMainLooper()) }
     private val pool: java.util.concurrent.ExecutorService by lazy { Executors.newSingleThreadExecutor() }
 
+    /** 同 fid 在途去重（AV-08）：首个请求是持有者，后到的挂回调队列复用同一份结果 */
+    private val inFlight = HashMap<Long, MutableList<(Map<Long, ThreadSummary>) -> Unit>>()
+
     /** SV-2：Activity 销毁时释放线程池（回调侧有 destroyed/页面校验兜底，仅止资源泄漏） */
     fun dispose() {
+        synchronized(inFlight) { inFlight.clear() }
         pool.shutdown()
     }
 
@@ -33,33 +37,57 @@ class EnrichBridge(
     fun enrich(payload: String?, themeEnabled: Boolean, pageUrl: String?) {
         val req = parseRequest(payload) ?: return
         val page = pageUrl ?: return
-        pool.execute {
-            // AR-06/AR-05：全命中零请求；快照 enabled+页 URL，回填前校验（页面已切换/主题已关则丢弃）
-            val cached = ForumRepository.cached(req.fid)
-            val allHit = cached != null && req.tids.all { cached.containsKey(it) }
-            val merged = HashMap(cached ?: emptyMap())
-            if (!allHit) {
-                val startPage = if (cached != null) 2 else 1
-                for (url in ForumRepository.pageUrls(req.fid, startPage, ForumRepository.MAX_PAGES_PER_REQUEST)) {
-                    val body = fetch(url) ?: break
-                    val (parsed, totalPages) = ForumRepository.parseForumView(body)
-                    merged.putAll(parsed)
-                    // 分页终点以服务端 total_page 为准（不按 rows.length 猜）
-                    val page = Regex("[?&]p=(\\d+)").find(url)?.groupValues?.get(1)?.toIntOrNull() ?: 1
-                    if (totalPages in 1 until page) break
-                    if (req.tids.all { merged.containsKey(it) }) break
-                }
-                // 失败/空结果不写缓存时间戳（不冒充有效缓存）
-                if (merged.isNotEmpty()) ForumRepository.putCache(req.fid, merged)
-            }
-            val matched = req.tids.mapNotNull { t -> merged[t]?.let { t to it } }.toMap()
-            if (matched.isEmpty()) return@execute
+        // AV-08：themeEnabled 是 JS 传入的不可信快照（注入侧传字面 true），不作判据；
+        // 权威状态=原生 WebState。入队捕获导航代次，回写前全量校验：
+        // 销毁 / 代次已变（页面切换或重载）/ 主题已关 / 页面 URL 已变，一律丢弃旧结果。
+        val gen = state.navGeneration
+        val deliver: (Map<Long, ThreadSummary>) -> Unit = deliver@{ matched ->
+            if (matched.isEmpty()) return@deliver
             val payloadOut = buildEnrichJson(matched)
             main.post {
-                if (!themeEnabled || state.currentUrl != page) return@post
+                if (state.destroyed || state.navGeneration != gen ||
+                    !state.webThemeEnabled || state.currentUrl != page
+                ) return@post
                 evaluateOnUi("if (window.SDG_ENRICH_APPLY) SDG_ENRICH_APPLY($payloadOut)")
             }
         }
+        val isLeader = synchronized(inFlight) {
+            val queue = inFlight[req.fid]
+            if (queue == null) {
+                inFlight[req.fid] = mutableListOf(deliver)
+                true
+            } else {
+                queue.add(deliver)
+                false
+            }
+        }
+        if (!isLeader) return
+        pool.execute {
+            val result = runCatching { loadMatches(req) }.getOrDefault(emptyMap())
+            val waiters = synchronized(inFlight) { inFlight.remove(req.fid) } ?: emptyList()
+            waiters.forEach { it(result) }
+        }
+    }
+
+    /** AR-06：全命中零请求；部分命中从服务端下一页续拉；失败/空结果不写缓存时间戳 */
+    private fun loadMatches(req: EnrichRequest): Map<Long, ThreadSummary> {
+        val cached = ForumRepository.cached(req.fid)
+        val allHit = cached != null && req.tids.all { cached.containsKey(it) }
+        val merged = HashMap(cached ?: emptyMap())
+        if (!allHit) {
+            val startPage = if (cached != null) 2 else 1
+            for (url in ForumRepository.pageUrls(req.fid, startPage, ForumRepository.MAX_PAGES_PER_REQUEST)) {
+                val body = fetch(url) ?: break
+                val (parsed, totalPages) = ForumRepository.parseForumView(body)
+                merged.putAll(parsed)
+                // 分页终点以服务端 total_page 为准（不按 rows.length 猜）
+                val page = Regex("[?&]p=(\\d+)").find(url)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+                if (totalPages in 1 until page) break
+                if (req.tids.all { merged.containsKey(it) }) break
+            }
+            if (merged.isNotEmpty()) ForumRepository.putCache(req.fid, merged)
+        }
+        return req.tids.mapNotNull { t -> merged[t]?.let { t to it } }.toMap()
     }
 
     internal fun fetch(url: String): String? = runCatching {
