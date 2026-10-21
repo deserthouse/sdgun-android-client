@@ -4,6 +4,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
 import io.github.deserthouse.sdgun.web.ThemeInjector
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -36,7 +37,7 @@ class ThemeInjectorTest {
 
     @Test
     fun `applyScript embeds rules hide and anchors`() {
-        val js = ThemeInjector.applyScript()
+        val js = applyScriptFromRealAssets()
         assertTrue(js.contains("window.SDG_RULES="))
         assertTrue(js.contains("window.SDG_HIDE="))
         assertTrue(js.contains("window.SDG_ANCHORS="))
@@ -62,6 +63,35 @@ class ThemeInjectorTest {
         val call = ThemeInjector.removeCall()
         assertTrue(call.contains("SDG_APPLY(null, false)"))
     }
+
+    @Test
+    fun `enrich teardown selector matches dataset attribute casing - AV-04`() {
+        val js = applyScriptFromRealAssets()
+        // dataset.sdgEn 写入的属性是 data-sdg-en（驼峰→连字符映射）；
+        // teardown 选择器必须用连字符形式。此前查 [data-sdgEn] 永不命中，
+        // 关主题后 8 行标记/8 头像/8 封面全部残留（AV-04 反例）。
+        assertTrue(js.contains("[data-sdg-en]"))
+        assertFalse(js.contains("[data-sdgEn]"))
+        // 写入侧与查询侧同源（都经 dataset 驼峰或连字符属性，禁止再出现混用）
+        assertTrue(js.contains("row.dataset.sdgEn"))
+        // 另一处被选择器查询的 dataset：sdgPh ↔ data-sdg-ph（防第二处同类错配）
+        assertTrue(js.contains("img[data-sdg-ph]"))
+    }
+
+    /** S2-1：applyScript 走资产——JVM 测试把真实资产文件经 testAssets 注入
+     *  （工作目录=android/），断言继续覆盖生产内容本身。 */
+    private fun applyScriptFromRealAssets(): String {
+        val names = listOf("base.css", "rules.css", "hide.css", "inject.js")
+        ThemeInjector.testAssets = names.associateWith {
+            java.io.File("src/main/assets/sdg/$it").readText()
+        }
+        try {
+            return ThemeInjector.applyScript()
+        } finally {
+            ThemeInjector.testAssets = null
+        }
+    }
+
 
     @Test
     fun `jsString escapes specials`() {

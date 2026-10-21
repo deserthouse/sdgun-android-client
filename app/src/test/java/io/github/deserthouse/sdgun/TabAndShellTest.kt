@@ -26,6 +26,14 @@ class TabAndShellTest {
     }
 
     @Test
+    fun `profile subpages keep mine tab ownership - AV-06a`() {
+        assertEquals(2, activeTab("https://bbs.sdgun.com.cn/home.php?mod=space&do=favorite&mobile=2"))
+        assertEquals(2, activeTab("https://bbs.sdgun.com.cn/home.php?mod=space&do=thread&mobile=2"))
+        assertEquals(2, activeTab("https://bbs.sdgun.com.cn/home.php?mod=space&do=notice&mobile=2"))
+        assertEquals(2, activeTab("https://bbs.sdgun.com.cn/home.php?mod=space&mobile=2"))
+    }
+
+    @Test
     fun `home url maps to first tab`() {
         assertEquals(0, activeTab("https://bbs.sdgun.com.cn/forum.php?forumlist=1&mobile=2"))
         assertEquals(0, activeTab("https://bbs.sdgun.com.cn/forum.php?mod=forumdisplay&fid=193&mobile=2"))

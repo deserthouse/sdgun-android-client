@@ -63,10 +63,13 @@ import io.github.deserthouse.sdgun.web.WebState
 
 /** 底栏选中态由当前 URL 反推（页内导航也能正确高亮；消息/我的之外一律视为首页）。
  *  登录页（member.php）无 tab URL 特征——未登录进消息/我的都会 302 到那里，
- *  此时按用户最近点击的 tab 高亮（F6，intendedTab 在点 tab 时更新）。 */
+ *  此时按用户最近点击的 tab 高亮（F6，intendedTab 在点 tab 时更新）。
+ *  AV-06a：个人中心族子页（收藏/我的主题/提醒/资料，home.php?mod=space&do=*）
+ *  从"我的"进入后仍归属"我的"，不再回落首页高亮。 */
 internal fun activeTab(currentUrl: String, intendedTab: Int = 0): Int = when {
     currentUrl.contains("do=pm") -> 1
     currentUrl.contains("mycenter=1") -> 2
+    currentUrl.contains("mod=space") -> 2
     currentUrl.contains("member.php") -> if (intendedTab in 0..2) intendedTab else 0
     else -> 0
 }

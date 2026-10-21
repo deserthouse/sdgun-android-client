@@ -1,0 +1,9 @@
+        html, body, .bg_xin, body.bg_xin { background: var(--sdg-surface-variant) !important; }
+        #wp, .bmw, .subforumshow, .header_nav_cover { background: transparent !important; }
+        body { color: var(--sdg-on-surface) !important; }
+        .xg1, .xg2, .grey { color: var(--sdg-on-surface-variant) !important; }
+    
+        #wp, .bmw, .subforumshow, .header_nav_cover { background: transparent !important; }
+        body { color: var(--sdg-on-surface) !important; }
+        .xg1, .xg2, .grey { color: var(--sdg-on-surface-variant) !important; }
+    

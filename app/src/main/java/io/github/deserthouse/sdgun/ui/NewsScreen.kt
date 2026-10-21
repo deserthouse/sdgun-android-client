@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -30,13 +31,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,11 +46,17 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import io.github.deserthouse.sdgun.data.NewsItem
 import io.github.deserthouse.sdgun.data.NewsRepository
+import kotlinx.coroutines.launch
 
 /**
  * 资讯流页（AF-01 / C5）：官方编辑资讯的只读列表（游客面）。
  * 卡片=封面+标题+摘要两行+来源/时间/评论数；点击经 onOpenLink 回 WebView 浏览详情。
- * 数据失败显示旧缓存/错误提示+重试；无后台轮询，进入才拉一页。
+ *
+ * AV-02 状态机（诚实语义）：
+ *  - 网络全部在 Repository 的 IO 协程执行，UI 线程零网络；
+ *  - 抓取走 rememberCoroutineScope（composition 绑定，离开页面即取消，无游离任务写状态）；
+ *  - 失败≠endReached：网络失败保留旧内容+横幅/重试本页，只有成功空页（或全重复）才"已到底"；
+ *  - 首拉失败在空态给"网络异常"文案与重试，不甩锅服务器。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,55 +65,61 @@ fun NewsScreen(
     onOpenLink: (String) -> Unit,
 ) {
     var items by remember { mutableStateOf(NewsRepository.cached(1) ?: emptyList()) }
-    var loading by remember { mutableStateOf(items.isEmpty()) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var attempt by remember { mutableIntStateOf(0) }
+    var firstLoading by remember { mutableStateOf(items.isEmpty()) }
+    var firstError by remember { mutableStateOf(false) }
     var stale by remember { mutableStateOf(false) }
     var endReached by remember { mutableStateOf(false) }
     var loadingMore by remember { mutableStateOf(false) }
+    var pageError by remember { mutableStateOf(false) }
     var nextPage by remember { mutableIntStateOf(2) }
+    val scope = rememberCoroutineScope()
 
-    // AR-08：首拉仅一页；失败时保留旧缓存数据（stale 横幅）而非清空
-    LaunchedEffect(attempt) {
-        if (attempt == 0 && items.isNotEmpty()) return@LaunchedEffect
-        loading = true
-        error = null
-        val fetched = loadNews(1, 1)
-        if (fetched != null) {
-            val merged = LinkedHashMap<Long, NewsItem>()
-            items.forEach { merged[it.id] = it }
-            fetched.forEach { merged[it.id] = it }
-            items = merged.values.toList()
-            NewsRepository.putCache(1, items)
-            stale = false
-        } else {
-            stale = items.isNotEmpty()
-            error = if (items.isEmpty()) "资讯拉取失败（服务器或网络波动）" else "刷新失败，显示的是缓存内容"
+    // force=true 供首拉使用：firstLoading 初值即 true（items 空、进页面就转圈），
+    // 重入守卫不能把首拉自己挡死（否则 spinner 永转、协程永不启动）
+    fun refresh(force: Boolean = false) {
+        if (firstLoading && !force) return
+        firstLoading = true
+        firstError = false
+        stale = false
+        scope.launch {
+            val fetched = NewsRepository.fetchPage(1, 1)
+            firstLoading = false
+            if (fetched == null) {
+                if (items.isEmpty()) firstError = true else stale = true
+            } else {
+                val (merged, _) = NewsRepository.mergeById(items, fetched)
+                items = merged
+                NewsRepository.putCache(1, merged)
+                if (fetched.isEmpty()) endReached = true
+            }
         }
-        loading = false
     }
 
-    // AR-08：滚动到底触发 load-more（单频道 cat_id=1；返回空列表即结束）
+    // AR-08：首拉仅一页；有未过期缓存时直接展示，不闪加载态
+    LaunchedEffect(Unit) {
+        if (items.isEmpty()) refresh(force = true)
+    }
+
+    // AR-08：滚动到底触发 load-more（单频道只读）；失败保留"重试本页"
     fun loadMore() {
-        if (loadingMore || endReached || loading) return
+        if (loadingMore || endReached || firstLoading) return
         loadingMore = true
+        pageError = false
         val page = nextPage
-        // SV-6：composition 绑定的协程——离开页面后自动取消，不再写已离开的状态
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-            val fetched = loadNews(page, 1)
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                loadingMore = false
-                if (fetched == null || fetched.isEmpty()) {
-                    endReached = true
-                } else {
-                    val merged = LinkedHashMap<Long, NewsItem>()
-                    items.forEach { merged[it.id] = it }
-                    var added = false
-                    fetched.forEach { if (merged.put(it.id, it) == null) added = true }
+        scope.launch {
+            val fetched = NewsRepository.fetchPage(1, page)
+            loadingMore = false
+            when {
+                fetched == null -> pageError = true
+                fetched.isEmpty() -> endReached = true
+                else -> {
+                    val (merged, added) = NewsRepository.mergeById(items, fetched)
                     if (added) {
-                        items = merged.values.toList()
+                        items = merged
                         nextPage = page + 1
-                    } else endReached = true
+                    } else {
+                        endReached = true
+                    }
                 }
             }
         }
@@ -116,10 +129,16 @@ fun NewsScreen(
         containerColor = MaterialTheme.colorScheme.surface,
         topBar = {
             TopAppBar(
-                title = { Text("资讯 · 频道 1") },
+                title = { Text("资讯") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                // W3-0：手动刷新入口——刷新失败保留旧内容+stale 横幅（AV-02 状态机的触发路径）
+                actions = {
+                    IconButton(onClick = { refresh() }) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "刷新")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -130,15 +149,33 @@ fun NewsScreen(
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when {
-                loading && items.isEmpty() -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                items.isEmpty() -> Column(
+                firstLoading && items.isEmpty() -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                items.isEmpty() && firstError -> Column(
                     Modifier.align(Alignment.Center).fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Text(error ?: "暂无资讯", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    androidx.compose.material3.TextButton(onClick = { attempt++ }) { Text("重试") }
+                    Text("资讯拉取失败（网络异常，请重试）", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    androidx.compose.material3.TextButton(onClick = { refresh() }) { Text("重试") }
                 }
+                items.isEmpty() -> Text(
+                    "暂无资讯",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.Center),
+                )
                 else -> LazyColumn(Modifier.fillMaxSize()) {
+                    if (stale) {
+                        item(key = "stale") {
+                            Text(
+                                "刷新失败，展示的是缓存内容",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(MaterialTheme.colorScheme.errorContainer)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                            )
+                        }
+                    }
                     items(items, key = { it.id }) { item ->
                         NewsCard(item) { onOpenLink(item.link) }
                     }
@@ -146,8 +183,11 @@ fun NewsScreen(
                         Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
                             when {
                                 loadingMore -> CircularProgressIndicator(Modifier.size(22.dp))
+                                pageError -> androidx.compose.material3.TextButton(onClick = { loadMore() }) {
+                                    Text("本页加载失败，重试")
+                                }
                                 endReached -> Text(
-                                    "已加载全部资讯（频道 1）",
+                                    "已加载全部资讯",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -162,27 +202,6 @@ fun NewsScreen(
         }
     }
 }
-
-private fun loadNews(page: Int, count: Int): List<NewsItem>? {
-    val out = ArrayList<NewsItem>()
-    for (url in NewsRepository.pageUrls(1, page, count)) {
-        val body = fetchNews(url) ?: break
-        out.addAll(NewsRepository.parseNewsList(body))
-    }
-    return out.ifEmpty { null }
-}
-
-private fun fetchNews(url: String): String? = runCatching {
-    val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-    conn.connectTimeout = 12000
-    conn.readTimeout = 15000
-    conn.setRequestProperty(
-        "User-Agent",
-        "Mozilla/5.0 (Linux; Android 16; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36",
-    )
-    conn.setRequestProperty("Accept", "application/json")
-    conn.inputStream.use { it.bufferedReader().readText() }
-}.getOrNull()
 
 @Composable
 private fun NewsCard(item: NewsItem, onClick: () -> Unit) {
@@ -232,7 +251,11 @@ private fun NewsCard(item: NewsItem, onClick: () -> Unit) {
 private fun NewsCover(url: String, modifier: Modifier) {
     var bmp by remember(url) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(url) {
-        GalleryBitmapLoader.load(url, 0, { bmp = it }, {})
+        // AV-07：封面用 512 档目标（卡片缩略图不需要相册级精度）
+        GalleryBitmapLoader.load(url, 0, target = 512, { bmp = it }, {})
+    }
+    DisposableEffect(url) {
+        onDispose { GalleryBitmapLoader.cancel(url, 0) }
     }
     Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant)) {
         bmp?.let {

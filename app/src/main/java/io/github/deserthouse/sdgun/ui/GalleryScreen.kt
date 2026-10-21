@@ -7,13 +7,18 @@ import android.os.Looper
 import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -21,11 +26,13 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,15 +40,39 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import io.github.deserthouse.sdgun.web.GalleryData
+import kotlinx.coroutines.launch
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
+
+/** AV-07：采样纯函数（顶层=JVM 可测，不触碰 object 的 Looper 依赖）。
+ *  最长边与总像素双约束，"当前尺寸超标即减半"（目标=解码结果入界）：
+ *  1000×30000 一类长图旧条件（宽高同时够大才采样）永不采样，恰是复审反例；
+ *  4000×3000 在减半后才判的旧写法下也会漏采（解码 12M 像素超预算）。
+ *  上限 64 防御异常输入死循环。 */
+internal fun computeSampleSize(
+    w: Int,
+    h: Int,
+    maxDimen: Int,
+    maxPixels: Long,
+): Int {
+    var s = 1
+    var cw = w
+    var ch = h
+    while (s < 64 && (maxOf(cw, ch) > maxDimen || cw.toLong() * ch > maxPixels)) {
+        s *= 2
+        cw /= 2
+        ch /= 2
+    }
+    return s
+}
 
 /**
  * 帖子图片查看器（AF-03）：全屏 HorizontalPager + 双指缩放/拖动 + 序号指示。
@@ -56,13 +87,25 @@ object GalleryBitmapLoader {
     private val pool = Executors.newFixedThreadPool(3)
     private val main = Handler(Looper.getMainLooper())
     private const val MAX_DIMEN = 2048
+    private const val MAX_PIXELS = 8_000_000L
 
-    /**
-     * AR-03：reqId=请求代次（同一 URL 快速翻页时旧任务回调被丢弃）；
-     * 响应体上限 12MB 防异常大图；显式 disconnect。
-     */
-    fun load(url: String, reqId: Int, onReady: (Bitmap) -> Unit, onError: () -> Unit) {
+    /** AV-07：在途请求表 url -> [(reqId, 分发回调)]——同 URL 去重复用，cancel 按 reqId 摘除 */
+    private val inFlight = HashMap<String, MutableList<Pair<Int, (Bitmap?) -> Unit>>>()
+
+    /** AR-03：reqId=请求代次（同一 URL 快速翻页时旧任务回调由调用方按代次丢弃）；
+     *  响应体上限 12MB 防异常大图；显式 disconnect。
+     *  target=解码目标最长边（封面 512 档 / 相册默认档——两类图不必同精度）。 */
+    fun load(url: String, reqId: Int, target: Int = MAX_DIMEN, onReady: (Bitmap) -> Unit, onError: () -> Unit) {
         cache.get(url)?.let { onReady(it); return }
+        val cb: (Bitmap?) -> Unit = { b -> if (b != null) onReady(b) else onError() }
+        synchronized(inFlight) {
+            val list = inFlight[url]
+            if (list != null) {
+                list.add(reqId to cb)
+                return
+            }
+            inFlight[url] = mutableListOf(reqId to cb)
+        }
         pool.execute {
             val bmp = runCatching {
                 val conn = URL(url).openConnection() as HttpURLConnection
@@ -88,30 +131,35 @@ object GalleryBitmapLoader {
                         // 两段式：先用头部探测尺寸（decodeByteArray 不消耗网络流）
                         val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                         BitmapFactory.decodeByteArray(head, 0, head.size, opts)
-                        var sample = 1
-                        var w = opts.outWidth
-                        var h = opts.outHeight
-                        while (w / 2 >= 1024 && h / 2 >= 1024) {
-                            sample *= 2
-                            w /= 2
-                            h /= 2
-                        }
+                        val sample = computeSampleSize(opts.outWidth, opts.outHeight, target, MAX_PIXELS)
                         val opts2 = BitmapFactory.Options().apply {
                             inSampleSize = sample
                             inPreferredConfig = Bitmap.Config.RGB_565
                         }
-                        BitmapFactory.decodeByteArray(head, 0, head.size, opts2)
+                        val bmp = BitmapFactory.decodeByteArray(head, 0, head.size, opts2)
+                        // AV-07 验收通道：实际解码尺寸+采样率落 logcat（脚本断言长图被采样）
+                        android.util.Log.d(
+                            "SDGGallery",
+                            "decode ${opts.outWidth}x${opts.outHeight} sample=$sample -> ${bmp?.width}x${bmp?.height}",
+                        )
+                        bmp
                     }
                 } finally {
                     conn.disconnect()
                 }
             }.getOrNull()
+            val waiters = synchronized(inFlight) { inFlight.remove(url) } ?: emptyList()
             main.post {
-                if (bmp != null) {
-                    cache.put(url, bmp)
-                    onReady(bmp)
-                } else onError()
+                if (bmp != null) cache.put(url, bmp)
+                waiters.forEach { it.second(bmp) }
             }
+        }
+    }
+
+    /** AV-07：页面离开/重试换代时摘除回调——迟到结果不再写已离开的组合状态 */
+    fun cancel(url: String, reqId: Int) {
+        synchronized(inFlight) {
+            inFlight[url]?.removeAll { it.first == reqId }
         }
     }
 }
@@ -123,6 +171,7 @@ fun GalleryScreen(data: GalleryData, onClose: () -> Unit) {
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         val pagerState = rememberPagerState(initialPage = data.startIndex) { data.urls.size }
+        val scope = rememberCoroutineScope()
         Box(
             Modifier
                 .fillMaxSize()
@@ -131,9 +180,42 @@ fun GalleryScreen(data: GalleryData, onClose: () -> Unit) {
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
-                key = { data.urls[it] },
+                key = { "$it:" + data.urls[it] },
             ) { page ->
                 GalleryPage(url = data.urls[page])
+            }
+            // AV-03：按钮是可访问翻页入口，但不是手势修复的替代品
+            if (pagerState.currentPage > 0) {
+                IconButton(
+                    onClick = {
+                        scope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) }
+                    },
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(8.dp),
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "上一张",
+                        tint = androidx.compose.ui.graphics.Color(0xFFE6E9F2),
+                    )
+                }
+            }
+            if (pagerState.currentPage < data.urls.size - 1) {
+                IconButton(
+                    onClick = {
+                        scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
+                    },
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(8.dp),
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = "下一张",
+                        tint = androidx.compose.ui.graphics.Color(0xFFE6E9F2),
+                    )
+                }
             }
             IconButton(
                 onClick = onClose,
@@ -171,14 +253,18 @@ private fun GalleryPage(url: String) {
         state = LoadState.LOADING
         val req = attempt
         // AR-03：reqId 随 attempt 递增——快速翻页后旧任务的回调因代次不符被丢弃
-        GalleryBitmapLoader.load(url, req, { b ->
+        GalleryBitmapLoader.load(url, req, onReady = { b ->
             if (req == attempt) {
                 bmp = b
                 state = LoadState.OK
             }
-        }, {
+        }, onError = {
             if (req == attempt) state = LoadState.FAILED
         })
+    }
+    // AV-07：离开页面/翻页换图时摘除本代次回调，迟到结果不再写已离开的组合状态
+    DisposableEffect(url, attempt) {
+        onDispose { GalleryBitmapLoader.cancel(url, attempt) }
     }
 
     Box(
@@ -199,11 +285,27 @@ private fun GalleryPage(url: String) {
                         translationX = offset.x
                         translationY = offset.y
                     }
+                    // AV-03：手势仲裁。detectTransformGestures 在 scale=1 时也消费单指
+                    // 平移，HorizontalPager 永远拿不到水平滑动（反例：60 图帖横滑不翻页）。
+                    // 规则：单指且未放大 → 不消费（事件放行给 Pager 翻页）；
+                    // 多指捏合或已放大 → 消费并应用缩放/平移；缩回 1× 即归位让出翻页。
                     .pointerInput(url) {
-                        detectTransformGestures { _, pan, zoom, _ ->
-                            val next = (scale * zoom).coerceIn(1f, 5f)
-                            scale = next
-                            offset = if (next > 1f) offset + pan else Offset.Zero
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false)
+                            do {
+                                val event = awaitPointerEvent()
+                                val multi = event.changes.count { it.pressed } > 1
+                                if (multi || scale > 1.01f) {
+                                    val zoom = event.calculateZoom()
+                                    val pan = event.calculatePan()
+                                    val next = (scale * zoom).coerceIn(1f, 5f)
+                                    scale = next
+                                    offset = if (next > 1f) offset + pan else Offset.Zero
+                                    event.changes.forEach { change ->
+                                        if (change.positionChanged()) change.consume()
+                                    }
+                                }
+                            } while (event.changes.any { it.pressed })
                         }
                     },
             )

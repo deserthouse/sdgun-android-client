@@ -1,5 +1,7 @@
 package io.github.deserthouse.sdgun.data
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /** 资讯条目（AF-01）：infoListByCatId 字段归一化 */
@@ -41,6 +43,53 @@ object NewsRepository {
     fun pageUrls(catId: Int, startPage: Int, pageCount: Int): List<String> =
         (startPage until startPage + pageCount.coerceIn(1, MAX_PAGES_PER_REQUEST))
             .map { "$ENDPOINT?cat_id=$catId&step=$PAGE_STEP&p=$it" }
+
+    /**
+     * AV-02：网络必须在 IO 线程（主线程联网抛 NetworkOnMainThreadException，
+     * 曾被 runCatching 吞成 null 后文案甩锅"服务器波动"）。
+     * 返回 null=请求失败（调用方保留旧内容）；空列表=成功但无数据（真分页终点）。
+     */
+    /**
+     * 测试注入点：JVM 测试用它模拟失败/空页语义。
+     * 真机链路无法可靠注入失败——HttpURLConnection 对代理失败会自动 failover 直连，
+     * "死代理"在直连通的环境里等于没死（2026-10-21 AVD 实测）。
+     */
+    internal var fetchOverride: ((String) -> String?)? = null
+
+    suspend fun fetchPage(catId: Int, page: Int, pageCount: Int = 1): List<NewsItem>? =
+        withContext(Dispatchers.IO) {
+            var anySuccess = false
+            val out = ArrayList<NewsItem>()
+            for (url in pageUrls(catId, page, pageCount)) {
+                val body = (fetchOverride ?: ::fetchNews)(url) ?: continue
+                anySuccess = true
+                out.addAll(parseNewsList(body))
+            }
+            if (anySuccess) out else null
+        }
+
+    private fun fetchNews(url: String): String? = runCatching {
+        val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+        conn.connectTimeout = 12000
+        conn.readTimeout = 15000
+        conn.setRequestProperty(
+            "User-Agent",
+            "Mozilla/5.0 (Linux; Android 16; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36",
+        )
+        conn.setRequestProperty("Accept", "application/json")
+        conn.inputStream.use { it.bufferedReader().readText() }
+    }.onFailure {
+        android.util.Log.d("SDGNews", "fetch fail ${it.javaClass.simpleName}: ${it.message}")
+    }.getOrNull()
+
+    /** 纯函数：按 id 去重合并（旧在前）；返回合并结果与是否有新增 */
+    fun mergeById(old: List<NewsItem>, fresh: List<NewsItem>): Pair<List<NewsItem>, Boolean> {
+        val merged = LinkedHashMap<Long, NewsItem>()
+        old.forEach { merged[it.id] = it }
+        var added = false
+        fresh.forEach { if (merged.put(it.id, it) == null) added = true }
+        return merged.values.toList() to added
+    }
 
     /** 纯函数：解析资讯列表；fail-closed 空列表 */
     fun parseNewsList(json: String): List<NewsItem> {

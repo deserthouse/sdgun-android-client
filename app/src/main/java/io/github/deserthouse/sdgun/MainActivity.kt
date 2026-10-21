@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalView
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -53,7 +54,9 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         state = WebState()
         val restored = savedInstanceState?.getBundle(KEY_WEB_STATE)
-        webView = createForumWebView(applicationContext, state, startUrl = null)
+        // AV-01：WebView 必须 Activity Context——applicationContext 构建的实例缺窗口 token，
+        // 站方原生 select 弹层（SelectPopup.show）全部 BadTokenException
+        webView = createForumWebView(this, state, startUrl = null)
         restored?.let { webView.restoreState(it) }
         if (webView.copyBackForwardList().size == 0) {
             if (!handleViewIntent(intent)) {
@@ -177,14 +180,27 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
     val webTheme by prefs.webTheme.collectAsState()
     val textZoom by prefs.textZoom.collectAsState()
     val colorScheme = MaterialTheme.colorScheme
+    val rootView = LocalView.current
+    val appContext = LocalContext.current
     LaunchedEffect(colorScheme, webTheme) {
         state.webThemeEnabled = webTheme
         webView.setBackgroundColor(colorScheme.background.toArgb())
-        state.pageThemeJs = ThemeInjector.applyScript() + "\n" + ThemeInjector.applyCall(colorScheme)
+        state.pageThemeJs = ThemeInjector.applyScript(appContext) + "\n" + ThemeInjector.applyCall(colorScheme)
         // AR-05：earlyBg 受开关门控——关闭后 onPageStarted 不再注入底色
         state.earlyBgJs = if (webTheme) ThemeInjector.earlyBgJs(colorScheme) else ""
         val js = if (webTheme) state.pageThemeJs else ThemeInjector.removeCall()
         webView.evaluateJavascript(js, null)
+        // AV-09：uiMode 在 configChanges（Activity 不重建），enableEdgeToEdge 只在
+        // onCreate 决定一次栏图标明暗——明暗热切换后必须随实际色板更新，
+        // 否则深→浅后状态栏白图标融进浅背景。亮度公式与 ThemeInjector.variableCss 一致。
+        (rootView.context as? android.app.Activity)?.window?.insetsController?.let { ctrl ->
+            val argb = colorScheme.surface.toArgb()
+            val lum = 0.299 * ((argb shr 16) and 0xFF) +
+                0.587 * ((argb shr 8) and 0xFF) + 0.114 * (argb and 0xFF)
+            val mask = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            ctrl.setSystemBarsAppearance(if (lum >= 128) mask else 0, mask)
+        }
     }
     LaunchedEffect(textZoom) { webView.settings.textZoom = textZoom }
 
