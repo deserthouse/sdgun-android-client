@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
@@ -256,7 +257,8 @@ private fun ThreadActionsRow(
 }
 
 
-/** 分享方式选择（AF-07）：论坛链接与 H5 链接（手机浏览器可打开）二选一 */
+/** 分享方式选择（AF-07）：论坛链接与 H5 链接（手机浏览器可打开）二选一。
+ *  C11：图标行语义（M3 列表项形态），触达目标=整行。 */
 @Composable
 private fun ShareSheet(forumUrl: String, h5Url: String?, onDismiss: () -> Unit, onShare: (String) -> Unit) {
     androidx.compose.material3.AlertDialog(
@@ -267,10 +269,14 @@ private fun ShareSheet(forumUrl: String, h5Url: String?, onDismiss: () -> Unit, 
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(onClick = { onDismiss(); onShare(forumUrl) }, modifier = Modifier.fillMaxWidth()) {
-                    Text("论坛链接", modifier = Modifier.fillMaxWidth())
+                    Icon(Icons.Filled.Article, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Text("论坛链接")
                 }
                 if (h5Url != null) {
                     TextButton(onClick = { onDismiss(); onShare(h5Url) }, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Filled.Language, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(10.dp))
                         Column {
                             Text("H5 链接（手机浏览器可打开）")
                             Text(

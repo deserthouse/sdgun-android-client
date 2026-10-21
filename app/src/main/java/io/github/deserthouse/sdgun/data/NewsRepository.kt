@@ -127,7 +127,8 @@ object NewsRepository {
         val arr = o.optJSONArray("pics_arr") ?: return null
         for (i in 0 until arr.length()) {
             val p = arr.optJSONObject(i) ?: continue
-            val u = p.optString("pic")
+            // C1：实际字段是 url/tburl（实测 API 无 pic 字段——此前恒空，封面从未显示）
+            val u = p.optString("url").ifBlank { p.optString("tburl") }
             if (u.startsWith("http")) return u
         }
         return null

@@ -79,7 +79,7 @@ fun SettingsScreen(
             SettingsCard(title = "外观") {
                 SwitchRow(
                     title = "动态取色",
-                    subtitle = "Android 12+ 跟随系统壁纸配色（Material You）",
+                    subtitle = "Android 12+ 跟随系统壁纸配色（Material You）；开启后品牌红让位系统色板",
                     checked = dynamicColor,
                     onCheckedChange = prefs::setDynamicColor,
                 )
@@ -107,12 +107,16 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.primary,
                         )
                     }
+                    // C10：连续滑条（steps 的末端 tick 在满值时与拇指并成"杂线"），松手取整 10
                     Slider(
                         value = zoomLocal,
                         onValueChange = { zoomLocal = it },
-                        onValueChangeFinished = { prefs.setTextZoom(zoomLocal.toInt()) },
+                        onValueChangeFinished = {
+                            val snapped = ((zoomLocal / 10f).let { it.toInt() + if (it % 1 >= 0.5f) 1 else 0 }) * 10
+                            zoomLocal = snapped.toFloat()
+                            prefs.setTextZoom(snapped)
+                        },
                         valueRange = 100f..140f,
-                        steps = 3,  // 100/110/120/130/140
                     )
                     Text(
                         "仅影响论坛页面文字；100% 为网页默认",
@@ -122,25 +126,28 @@ fun SettingsScreen(
                 }
             }
 
-            SettingsCard(title = "开发者") {
-                val debugBridge by prefs.debugBridge.collectAsStateCompat()
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("调试桥", style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            "允许本机自动化工具注入 JS 到页面（仅调试构建有效）",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            // C6：调试桥只在 debug 构建存在（release 永不注册接收器，开关是无效摆设）
+            if (BuildConfig.DEBUG) {
+                SettingsCard(title = "开发者") {
+                    val debugBridge by prefs.debugBridge.collectAsStateCompat()
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("调试桥", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "允许本机自动化工具注入 JS 到页面（仅调试构建有效）",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        androidx.compose.material3.Switch(
+                            checked = debugBridge,
+                            onCheckedChange = { prefs.setDebugBridge(it) },
                         )
                     }
-                    androidx.compose.material3.Switch(
-                        checked = debugBridge,
-                        onCheckedChange = { prefs.setDebugBridge(it) },
-                    )
                 }
             }
 

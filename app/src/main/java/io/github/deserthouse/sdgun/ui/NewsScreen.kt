@@ -136,9 +136,17 @@ fun NewsScreen(
                     }
                 },
                 // W3-0：手动刷新入口——刷新失败保留旧内容+stale 横幅（AV-02 状态机的触发路径）
+                // C2：进行中给忙碌态（转圈），否则点击后最长十几秒零反馈
                 actions = {
-                    IconButton(onClick = { refresh() }) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+                    if (firstLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp).padding(2.dp),
+                            strokeWidth = 2.5.dp,
+                        )
+                    } else {
+                        IconButton(onClick = { refresh() }) {
+                            Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

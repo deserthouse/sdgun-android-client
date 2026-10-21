@@ -21,7 +21,7 @@ import androidx.compose.ui.unit.dp
  *      关闭时回退品牌色板——从官方资产实证取样（2026-09-30）：触屏版头栏红 #E24444 系、
  *      官方 App 启动页深红（遮罩校正后 ≈#B00000 系）、深色基因 #111111。
  * 形状：M3E 风格的大圆角体系（卡片 20dp / 中组件 16dp / 控件全胶囊）。
- * 网页层：同一组色值经 [io.github.deserthouse.sdgun.web.buildWebThemeCss] 注入触屏版，
+ * 网页层：同一组色值经 [io.github.deserthouse.sdgun.web.ThemeInjector.variableCss] 注入触屏版，
  *        原生与内容共用一套设计令牌。
  */
 
@@ -51,6 +51,13 @@ private val LightColors = lightColorScheme(
     onSurfaceVariant = Color(0xFF534341),
     outline = Color(0xFF857370),
     outlineVariant = Color(0xFFD8C2BF),
+    // C5：container 五档补齐（暖红阶梯）——Card 等容器不再落 baseline 灰紫，
+    // 与 surface 拉开层次（浅色下"卡片发灰/层次弱"的根因）
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFFEF1EE),
+    surfaceContainer = Color(0xFFFCEAE6),
+    surfaceContainerHigh = Color(0xFFF6E4E1),
+    surfaceContainerHighest = Color(0xFFF1DED9),
 )
 
 private val DarkColors = darkColorScheme(
@@ -75,6 +82,12 @@ private val DarkColors = darkColorScheme(
     onSurfaceVariant = Color(0xFFD8C2BF),
     outline = Color(0xFFA08C8A),
     outlineVariant = Color(0xFF534341),
+    // C5：深色五档（#111 基因上的暖色微阶梯）
+    surfaceContainerLowest = Color(0xFF0F0D0E),
+    surfaceContainerLow = Color(0xFF1B191A),
+    surfaceContainer = Color(0xFF201D1E),
+    surfaceContainerHigh = Color(0xFF2B2829),
+    surfaceContainerHighest = Color(0xFF363333),
 )
 
 /** M3E 大圆角形状令牌 */

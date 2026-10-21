@@ -14,6 +14,7 @@ import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
@@ -89,22 +90,26 @@ object GalleryBitmapLoader {
     private const val MAX_DIMEN = 2048
     private const val MAX_PIXELS = 8_000_000L
 
-    /** AV-07：在途请求表 url -> [(reqId, 分发回调)]——同 URL 去重复用，cancel 按 reqId 摘除 */
+    /** AV-07：在途请求表 键 -> [(reqId, 分发回调)]——同键去重复用，cancel 按 reqId 摘除。
+     *  C3：键含 target——封面(512)与相册(2048)同 URL 各自解码，先到者不再决定另一方的质量。 */
     private val inFlight = HashMap<String, MutableList<Pair<Int, (Bitmap?) -> Unit>>>()
+
+    private fun cacheKey(target: Int, url: String) = "$target:$url"
 
     /** AR-03：reqId=请求代次（同一 URL 快速翻页时旧任务回调由调用方按代次丢弃）；
      *  响应体上限 12MB 防异常大图；显式 disconnect。
      *  target=解码目标最长边（封面 512 档 / 相册默认档——两类图不必同精度）。 */
     fun load(url: String, reqId: Int, target: Int = MAX_DIMEN, onReady: (Bitmap) -> Unit, onError: () -> Unit) {
-        cache.get(url)?.let { onReady(it); return }
+        val k = cacheKey(target, url)
+        cache.get(k)?.let { onReady(it); return }
         val cb: (Bitmap?) -> Unit = { b -> if (b != null) onReady(b) else onError() }
         synchronized(inFlight) {
-            val list = inFlight[url]
+            val list = inFlight[k]
             if (list != null) {
                 list.add(reqId to cb)
                 return
             }
-            inFlight[url] = mutableListOf(reqId to cb)
+            inFlight[k] = mutableListOf(reqId to cb)
         }
         pool.execute {
             val bmp = runCatching {
@@ -140,7 +145,7 @@ object GalleryBitmapLoader {
                         // AV-07 验收通道：实际解码尺寸+采样率落 logcat（脚本断言长图被采样）
                         android.util.Log.d(
                             "SDGGallery",
-                            "decode ${opts.outWidth}x${opts.outHeight} sample=$sample -> ${bmp?.width}x${bmp?.height}",
+                            "decode ${opts.outWidth}x${opts.outHeight} sample=$sample -> ${bmp?.width}x${bmp?.height} t=$target",
                         )
                         bmp
                     }
@@ -148,18 +153,18 @@ object GalleryBitmapLoader {
                     conn.disconnect()
                 }
             }.getOrNull()
-            val waiters = synchronized(inFlight) { inFlight.remove(url) } ?: emptyList()
+            val waiters = synchronized(inFlight) { inFlight.remove(k) } ?: emptyList()
             main.post {
-                if (bmp != null) cache.put(url, bmp)
+                if (bmp != null) cache.put(k, bmp)
                 waiters.forEach { it.second(bmp) }
             }
         }
     }
 
     /** AV-07：页面离开/重试换代时摘除回调——迟到结果不再写已离开的组合状态 */
-    fun cancel(url: String, reqId: Int) {
+    fun cancel(url: String, reqId: Int, target: Int = MAX_DIMEN) {
         synchronized(inFlight) {
-            inFlight[url]?.removeAll { it.first == reqId }
+            inFlight[cacheKey(target, url)]?.removeAll { it.first == reqId }
         }
     }
 }
@@ -172,10 +177,11 @@ fun GalleryScreen(data: GalleryData, onClose: () -> Unit) {
     ) {
         val pagerState = rememberPagerState(initialPage = data.startIndex) { data.urls.size }
         val scope = rememberCoroutineScope()
+        // C4：全不透明背景（0.96 透底在浅色模式顶部露原页亮边）
         Box(
             Modifier
                 .fillMaxSize()
-                .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.96f)),
+                .background(androidx.compose.ui.graphics.Color.Black),
         ) {
             HorizontalPager(
                 state = pagerState,
@@ -194,11 +200,22 @@ fun GalleryScreen(data: GalleryData, onClose: () -> Unit) {
                         .align(Alignment.CenterStart)
                         .padding(8.dp),
                 ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "上一张",
-                        tint = androidx.compose.ui.graphics.Color(0xFFE6E9F2),
-                    )
+                    // C4：半透明黑衬底——白底图上箭头仍可辨
+                    Box(
+                        Modifier
+                            .size(40.dp)
+                            .background(
+                                androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.45f),
+                                androidx.compose.foundation.shape.CircleShape,
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "上一张",
+                            tint = androidx.compose.ui.graphics.Color(0xFFE6E9F2),
+                        )
+                    }
                 }
             }
             if (pagerState.currentPage < data.urls.size - 1) {
@@ -210,11 +227,21 @@ fun GalleryScreen(data: GalleryData, onClose: () -> Unit) {
                         .align(Alignment.CenterEnd)
                         .padding(8.dp),
                 ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowForward,
-                        contentDescription = "下一张",
-                        tint = androidx.compose.ui.graphics.Color(0xFFE6E9F2),
-                    )
+                    Box(
+                        Modifier
+                            .size(40.dp)
+                            .background(
+                                androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.45f),
+                                androidx.compose.foundation.shape.CircleShape,
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowForward,
+                            contentDescription = "下一张",
+                            tint = androidx.compose.ui.graphics.Color(0xFFE6E9F2),
+                        )
+                    }
                 }
             }
             IconButton(
