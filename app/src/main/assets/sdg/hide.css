@@ -1,3 +1,8 @@
         .footer, .post_footer, .landingPrompt, .byg_bl_lang1, .byg_bl_lang2,
         .div_foot, #mask { display: none !important; }
-    
+
+        /* A70-06 兼容页减法（2026-10-22）：站方红头（hdc_xin=53px 头条，探针实测不含正文，
+           曾误判为页根——同刻的黑屏实为宿主模拟器 GPU 读回退化，重启实证无关）与
+           右下浮动"导航"球（byg_scrolltop）均为重复导航——隐藏，只保一套宿主导航。 */
+        .hdc_xin, .byg_scrolltop { display: none !important; }
+

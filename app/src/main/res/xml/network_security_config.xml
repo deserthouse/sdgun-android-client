@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 仅图床 picapp.sdgun.net 走 http 明文（https 页面内混载），收窄到最小必要域 -->
+<!-- http 明文图床收窄逐域放行：picapp（站点图标/资讯封面）+ sdgun.ymgames.com.cn
+     （帖子正文真图床，threadView data-original 实测全在此域，2026-10-22） -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">picapp.sdgun.net</domain>
+        <domain includeSubdomains="false">sdgun.ymgames.com.cn</domain>
     </domain-config>
 </network-security-config>

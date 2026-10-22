@@ -100,10 +100,11 @@ class MainActivity : ComponentActivity() {
             debugJsReceiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context, i: Intent) {
                     val b64 = i.getStringExtra("b64") ?: return
+                    android.util.Log.d("JsBridge", "recv ${b64.length} chars")
                     runCatching {
                         val js = String(Base64.decode(b64, Base64.DEFAULT), Charsets.UTF_8)
                         webView.evaluateJavascript(js, null)
-                    }
+                    }.onFailure { android.util.Log.w("JsBridge", "eval fail", it) }
                 }
             }
             val filter = IntentFilter("io.github.deserthouse.sdgun.JS")
@@ -182,6 +183,7 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
             3 -> "profile"
             else -> return
         }
+        android.util.Log.d("NavTab", "tap$index -> $route stack=${navController.currentBackStack.value.joinToString(",") { it.destination.route ?: "null" }}")
         navController.navigate(route) {
             popUpTo("focus") { saveState = true }
             launchSingleTop = true
