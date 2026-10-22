@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -36,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import io.github.deserthouse.sdgun.core.model.MutationState
 import io.github.deserthouse.sdgun.core.model.UiState
 import io.github.deserthouse.sdgun.data.repository.ThreadRepository
 import io.github.deserthouse.sdgun.feature.media.GalleryScreen
@@ -58,6 +60,15 @@ fun ThreadPage(
     onTogglePoster: () -> Unit,
     onLoadMore: () -> Unit,
     onBack: () -> Unit,
+    // G4 写操作（路由层持有状态与提交；本页只渲染+回调）
+    isLoggedIn: Boolean,
+    applaudStates: Map<Long, MutationState>,
+    applaudedIds: Set<Long>,
+    onApplaud: (Long) -> Unit,
+    isCollected: Boolean,
+    collectState: MutationState?,
+    onCollect: () -> Unit,
+    onReply: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // 图片查看器自持（A70-04）：任何内容图点击即开，关闭/Back 都回原位
@@ -69,6 +80,18 @@ fun ThreadPage(
 
     Scaffold(
         modifier = modifier,
+        bottomBar = {
+            // G4 回复入口：游客引导登录（路由层跳转），登录态开编辑器
+            Row(
+                Modifier.fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            ) {
+                Button(onClick = onReply, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (isLoggedIn) "回复本帖" else "登录后回复")
+                }
+            }
+        },
         topBar = {
             TopAppBar(
                 navigationIcon = {
@@ -111,7 +134,17 @@ fun ThreadPage(
                 }
                 val opGroup = remember(opBlocks) { imageUrls(opBlocks) }
                 LazyColumn(Modifier.fillMaxSize().padding(padding)) {
-                    item(key = "op_head") { OpHeader(op) }
+                    item(key = "op_head") {
+                        OpHeader(
+                            op,
+                            applauded = op.pid in applaudedIds,
+                            applaudState = applaudStates[op.pid],
+                            isCollected = isCollected,
+                            collectState = collectState,
+                            onApplaud = { onApplaud(op.pid) },
+                            onCollect = onCollect,
+                        )
+                    }
                     items(opBlocks, key = { it.key }) { block ->
                         BlockView(block, opGroup, openViewer)
                     }
@@ -121,7 +154,7 @@ fun ThreadPage(
                             onToggleOrder = onToggleOrder, onTogglePoster = onTogglePoster,
                         )
                     }
-                    floorsItems(floorsState, openViewer)
+                    floorsItems(floorsState, applaudStates, applaudedIds, onApplaud, openViewer)
                     moreItem(floorsState, onLoadMore)
                 }
             }
@@ -155,6 +188,9 @@ private fun FloorControls(
 /** 楼层流（LazyListScope 扩展）：Data/Stale 两态都产出独立楼层项；Stale 先给横幅。 */
 private fun LazyListScope.floorsItems(
     floorsState: UiState<ThreadRepository.FloorsPage>,
+    applaudStates: Map<Long, MutationState>,
+    applaudedIds: Set<Long>,
+    onApplaud: (Long) -> Unit,
     onOpenImage: (List<String>, Int) -> Unit,
 ) {
     when (val fs = floorsState) {
@@ -179,10 +215,10 @@ private fun LazyListScope.floorsItems(
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
-            floorEntries(fs.stale, onOpenImage)
+            floorEntries(fs.stale, applaudStates, applaudedIds, onApplaud, onOpenImage)
         }
 
-        is UiState.Data<ThreadRepository.FloorsPage> -> floorEntries(fs.value, onOpenImage)
+        is UiState.Data<ThreadRepository.FloorsPage> -> floorEntries(fs.value, applaudStates, applaudedIds, onApplaud, onOpenImage)
 
         else -> {}
     }
@@ -190,10 +226,13 @@ private fun LazyListScope.floorsItems(
 
 private fun LazyListScope.floorEntries(
     fp: ThreadRepository.FloorsPage,
+    applaudStates: Map<Long, MutationState>,
+    applaudedIds: Set<Long>,
+    onApplaud: (Long) -> Unit,
     onOpenImage: (List<String>, Int) -> Unit,
 ) {
     items(fp.floors, key = { "f_${it.pid}" }) { floor ->
-        FloorCard(floor, onOpenImage)
+        FloorCard(floor, applaudStates[floor.pid], floor.pid in applaudedIds, onApplaud, onOpenImage)
     }
 }
 
@@ -213,7 +252,15 @@ private fun LazyListScope.moreItem(
 }
 
 @Composable
-private fun OpHeader(op: ThreadRepository.ThreadOP) {
+private fun OpHeader(
+    op: ThreadRepository.ThreadOP,
+    applauded: Boolean,
+    applaudState: MutationState?,
+    isCollected: Boolean,
+    collectState: MutationState?,
+    onApplaud: () -> Unit,
+    onCollect: () -> Unit,
+) {
     Column(Modifier.padding(16.dp)) {
         Text(op.title, style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(8.dp))
@@ -234,6 +281,28 @@ private fun OpHeader(op: ThreadRepository.ThreadOP) {
                     ).joinToString(" · "),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = onApplaud) {
+                Text(
+                    when (applaudState) {
+                        is MutationState.Submitting -> "点赞中…"
+                        is MutationState.Rejected -> "点赞失败"
+                        is MutationState.OutcomeUnknown -> "点赞待确认"
+                        else -> if (applauded) "已点赞" else "点赞"
+                    }
+                )
+            }
+            TextButton(onClick = onCollect) {
+                Text(
+                    when (collectState) {
+                        is MutationState.Submitting -> "收藏中…"
+                        is MutationState.Rejected -> "收藏失败"
+                        is MutationState.OutcomeUnknown -> "收藏待确认"
+                        else -> if (isCollected) "已收藏" else "收藏"
+                    }
                 )
             }
         }

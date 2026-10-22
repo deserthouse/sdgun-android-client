@@ -10,12 +10,22 @@ import io.github.deserthouse.sdgun.feature.feed.FocusViewModel
 import io.github.deserthouse.sdgun.feature.community.HomeScreen
 import io.github.deserthouse.sdgun.feature.community.CommunityPage
 import io.github.deserthouse.sdgun.feature.community.BoardPage
+import io.github.deserthouse.sdgun.feature.thread.ReplySheet
 import io.github.deserthouse.sdgun.feature.thread.ThreadPage
 import io.github.deserthouse.sdgun.feature.account.AccountScreen
 import io.github.deserthouse.sdgun.feature.account.LoginScreen
 import io.github.deserthouse.sdgun.feature.account.ProfilePage
 import io.github.deserthouse.sdgun.feature.messages.MessagesPage
 import io.github.deserthouse.sdgun.core.designsystem.AppBottomBar
+import io.github.deserthouse.sdgun.core.mutation.FakeMutationGateway
+import io.github.deserthouse.sdgun.core.mutation.HttpMutationGateway
+import io.github.deserthouse.sdgun.core.mutation.MutationGateway
+import io.github.deserthouse.sdgun.core.mutation.MutationKind
+import io.github.deserthouse.sdgun.core.mutation.MutationRequest
+import io.github.deserthouse.sdgun.core.mutation.MutationRunner
+import io.github.deserthouse.sdgun.core.model.MutationState
+import io.github.deserthouse.sdgun.data.repository.DraftStore
+import io.github.deserthouse.sdgun.BuildConfig
 import io.github.deserthouse.sdgun.core.model.UiState
 import io.github.deserthouse.sdgun.data.repository.BoardRepository
 import io.github.deserthouse.sdgun.data.repository.BoardListRepository
@@ -46,6 +56,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -387,6 +398,31 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
             val tid = entry.arguments?.getString("tid")?.toLongOrNull() ?: 0L
             val fid = entry.arguments?.getString("fid")?.toLongOrNull() ?: 0L
             val scope = rememberCoroutineScope()
+            // ── G4 写操作（真实写入验收=用户 MANUAL；AVD 走查用 debug 假服务，零触网）──
+            val mutContext = LocalContext.current
+            val mutToken by prefs.apiToken.collectAsState()
+            val fakeMode by prefs.mutationFake.collectAsState()
+            val gateway: MutationGateway =
+                if (BuildConfig.DEBUG && fakeMode != "off") FakeMutationGateway(fakeMode)
+                else HttpMutationGateway()
+            var replyOpen by remember(tid) { mutableStateOf(false) }
+            var replyState by remember(tid) { mutableStateOf<MutationState>(MutationState.Draft) }
+            val applaudStates = remember(tid) { mutableStateMapOf<Long, MutationState>() }
+            val applaudedIds = remember(tid) { mutableStateOf(setOf<Long>()) }
+            var collected by remember(tid) { mutableStateOf(false) }
+            var collectState by remember(tid) { mutableStateOf<MutationState?>(null) }
+
+            fun submitMutation(kind: MutationKind, params: Map<String, String>, onState: (MutationState) -> Unit) {
+                val t = mutToken
+                if (t.isBlank()) return
+                val cap = io.github.deserthouse.sdgun.core.session.SessionManager.store.epoch.value
+                scope.launch {
+                    MutationRunner.submit(
+                        MutationRequest(kind, params, t), gateway, cap,
+                        { captured -> io.github.deserthouse.sdgun.core.session.SessionManager.store.epoch.isCurrent(captured) },
+                    ) { st -> onState(st) }
+                }
+            }
             var opState by remember(tid) {
                 mutableStateOf<UiState<ThreadRepository.ThreadOP>>(UiState.InitialLoading)
             }
@@ -448,7 +484,74 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                 onTogglePoster = { posterOnly = !posterOnly; loadFloors(true) },
                 onLoadMore = { loadFloors(false) },
                 onBack = { navController.popBackStack() },
+                isLoggedIn = mutToken.isNotBlank(),
+                applaudStates = applaudStates,
+                applaudedIds = applaudedIds.value,
+                onApplaud = { pid ->
+                    if (mutToken.isBlank()) { navigateTab(3); return@ThreadPage }
+                    if (applaudStates[pid] is MutationState.Submitting) return@ThreadPage
+                    applaudedIds.value = applaudedIds.value + pid  // 乐观 +1
+                    submitMutation(MutationKind.APPLAUD, mapOf("content_id" to "$pid")) { st ->
+                        applaudStates[pid] = st
+                        if (st !is MutationState.Confirmed) {
+                            applaudedIds.value = applaudedIds.value - pid  // 失败/待确认回退
+                        }
+                    }
+                },
+                isCollected = collected,
+                collectState = collectState,
+                onCollect = {
+                    if (mutToken.isBlank()) { navigateTab(3); return@ThreadPage }
+                    if (collectState is MutationState.Submitting) return@ThreadPage
+                    val op = (opState as? UiState.Data<ThreadRepository.ThreadOP>)?.value
+                    submitMutation(
+                        MutationKind.COLLECT,
+                        mapOf(
+                            "title" to (op?.title ?: ""),
+                            "url" to "https://bbs.sdgun.com.cn/forum.php?mod=viewthread&tid=$tid",
+                            "content_type" to "thread",
+                            "id" to "$fid",
+                            "content_id" to "$tid",
+                        ),
+                    ) { st ->
+                        collectState = st
+                        if (st is MutationState.Confirmed) collected = true
+                    }
+                },
+                onReply = {
+                    if (mutToken.isBlank()) { navigateTab(3) } else { replyOpen = true }
+                },
             )
+            if (replyOpen) {
+                ReplySheet(
+                    initialDraft = DraftStore.load(mutContext, tid),
+                    state = replyState,
+                    onDraftChange = { DraftStore.save(mutContext, tid, it) },
+                    onSend = { text ->
+                        // auth=同盾参数（静态编目不可复刻，空值提交；真实验收=用户 MANUAL）
+                        submitMutation(
+                            MutationKind.REPLY,
+                            mapOf(
+                                "tid" to "$tid",
+                                "reply_id" to "",
+                                "circle_id" to "",
+                                "content" to text,
+                                "video" to "",
+                                "auth" to "",
+                                "users" to "",
+                            ),
+                        ) { st ->
+                            replyState = st
+                            if (st is MutationState.Confirmed) {
+                                DraftStore.clear(mutContext, tid)
+                                replyOpen = false
+                                loadFloors(true)
+                            }
+                        }
+                    },
+                    onDismiss = { replyOpen = false },
+                )
+            }
         }
         // ── 一级 tab 2：消息（G3）——游客态 tab 内嵌登录面（门禁不跳路由，选中态不漂移）──
         composable("messages") {

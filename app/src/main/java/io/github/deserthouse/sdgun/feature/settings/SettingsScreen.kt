@@ -147,6 +147,31 @@ fun SettingsScreen(
                             onCheckedChange = { prefs.setDebugBridge(it) },
                         )
                     }
+
+                    // G4 假服务分支（零触网）：装机验证写操作 UI 状态机用；
+                    // 真实写入验收=用户本人 MANUAL，红线不变
+                    val fakeModes = listOf("off", "confirm", "reject", "timeout")
+                    val mutationFake by prefs.mutationFake.collectAsStateCompat()
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("写操作假服务", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "回复/点赞/收藏走离线假端点（零触网），验证提交状态机；off=真端点",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        TextButton(onClick = {
+                            val next = fakeModes[((fakeModes.indexOf(mutationFake) + 1) % fakeModes.size)]
+                            prefs.setMutationFake(next)
+                        }) {
+                            Text(mutationFake)
+                        }
+                    }
                 }
             }
 

@@ -20,6 +20,10 @@ class AppPrefs(context: Context) {
     private val _debugBridge = MutableStateFlow(sp.getBoolean(KEY_DEBUG_BRIDGE, true))
     val debugBridge: StateFlow<Boolean> = _debugBridge
 
+    /** G4 假服务分支（debug 装机验证用）：off/confirm/reject/timeout——off=真端点 */
+    private val _mutationFake = MutableStateFlow(sp.getString(KEY_MUTATION_FAKE, "off") ?: "off")
+    val mutationFake: StateFlow<String> = _mutationFake
+
     private val _textZoom = MutableStateFlow(sp.getInt(KEY_TEXT_ZOOM, 100))
     val textZoom: StateFlow<Int> = _textZoom
 
@@ -36,6 +40,11 @@ class AppPrefs(context: Context) {
     fun setDebugBridge(v: Boolean) {
         sp.edit().putBoolean(KEY_DEBUG_BRIDGE, v).apply()
         _debugBridge.value = v
+    }
+
+    fun setMutationFake(v: String) {
+        sp.edit().putString(KEY_MUTATION_FAKE, v).apply()
+        _mutationFake.value = v
     }
 
     fun setTextZoom(v: Int) {
@@ -81,6 +90,7 @@ class AppPrefs(context: Context) {
         const val KEY_TEXT_ZOOM = "text_zoom"
 
         const val KEY_DEBUG_BRIDGE = "debug_bridge"
+        const val KEY_MUTATION_FAKE = "mutation_fake"
 
         const val KEY_API_TOKEN = "api_token"
         const val KEY_API_ACCOUNT = "api_account"

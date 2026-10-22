@@ -18,6 +18,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -33,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.Image
+import io.github.deserthouse.sdgun.core.model.MutationState
 import io.github.deserthouse.sdgun.data.repository.ThreadRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -144,10 +146,13 @@ fun PostImage(url: String, onClick: () -> Unit) {
     }
 }
 
-/** 楼层卡（A70-04 块化）：楼层号+作者+内容块（图文交错）+时间/赞；图片点击开查看器。 */
+/** 楼层卡（A70-04 块化）：楼层号+作者+内容块（图文交错）+时间/赞（G4 点赞按钮化）。 */
 @Composable
 fun FloorCard(
     floor: ThreadRepository.Floor,
+    applaudState: MutationState?,
+    applauded: Boolean,
+    onApplaud: (Long) -> Unit,
     onOpenImage: (List<String>, Int) -> Unit,
 ) {
     val blocks = remember(floor.pid, floor.contentHtml) {
@@ -187,10 +192,19 @@ fun FloorCard(
                 Text(it, style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            floor.applaudCount?.let {
-                Spacer(Modifier.width(10.dp))
-                Text("赞 $it", style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.weight(1f))
+            // G4 点赞：乐观 +1（失败/待确认回退由路由层管理 applaudedIds）
+            val count = floor.applaudCount?.let { if (applauded) it + 1 else it }
+            TextButton(onClick = { onApplaud(floor.pid) }) {
+                Text(
+                    when (applaudState) {
+                        is MutationState.Submitting -> "…"
+                        is MutationState.Rejected -> "赞失败"
+                        is MutationState.OutcomeUnknown -> "待确认"
+                        else -> "赞 ${count ?: ""}".trim()
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                )
             }
         }
         HorizontalDivider(
