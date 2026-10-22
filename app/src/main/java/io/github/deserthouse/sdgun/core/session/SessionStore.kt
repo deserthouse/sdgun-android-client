@@ -28,29 +28,33 @@ class SessionEpoch {
 }
 
 /**
- * API 会话状态（R-A1 SessionStore 升级版）：token+账号+epoch 单一持有。
+ * API 会话状态（R-A1 SessionStore 升级版）：token+账号+userId+epoch 单一持有。
  * AppPrefs 保留持久化；本类持运行时单例流。
+ * 写路唯一性（A70-03）：UI 只能经 onLogin/onLogout 触达，不得直写 AppPrefs。
  */
 class SessionStore(private val prefs: io.github.deserthouse.sdgun.data.repository.AppPrefs) {
 
-    data class Session(val token: String, val account: String)
+    data class Session(val token: String, val account: String, val userId: Long)
 
     private val _session = MutableStateFlow(
-        prefs.apiToken.value.takeIf { it.isNotBlank() }?.let { Session(it, prefs.apiAccount.value) }
+        prefs.apiToken.value.takeIf { it.isNotBlank() }?.let {
+            Session(it, prefs.apiAccount.value, prefs.apiUserId.value)
+        }
     )
     val session: StateFlow<Session?> = _session
 
     val epoch = SessionEpoch()
 
     /** 登录成功：写入会话并推进 epoch（旧会话在途任务全部作废） */
-    fun onLogin(token: String, account: String) {
-        prefs.setApiSession(token, account)
+    fun onLogin(token: String, account: String, userId: Long) {
+        prefs.setApiSession(token, account, userId)
         epoch.advance()
-        _session.value = Session(token, account)
+        _session.value = Session(token, account, userId)
     }
 
-    /** 退出：先撤销 token 再清状态（总设计 §4：退出先撤权再换页面） */
+    /** 退出：先撤销 token 再清状态（总设计 §4：退出先撤权再换页面）；幂等 */
     fun onLogout() {
+        if (_session.value == null && prefs.apiToken.value.isBlank()) return
         prefs.clearApiSession()
         epoch.advance()
         _session.value = null

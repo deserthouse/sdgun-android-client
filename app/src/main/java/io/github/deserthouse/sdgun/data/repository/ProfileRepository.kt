@@ -107,16 +107,40 @@ object ProfileRepository {
             val conn = URL(url).openConnection() as HttpURLConnection
             conn.connectTimeout = 12000
             conn.readTimeout = 15000
-            conn.setRequestProperty("User-Agent",
-                "Mozilla/5.0 (Linux; Android 16; Pixel 8) MAGAPPX|6.4.0-2.90-30042|Android 16 google Pixel 8|shuidan|koPx4DY3tw7hrg5nKpSmc3|88af41c4c24832860d97d44e436f8842|174e1e66702c31aa7e949f5ab30db60b|$token")
+            conn.setRequestProperty("User-Agent", magappxUa(token))
             try {
                 conn.inputStream.bufferedReader().readText()
             } finally { conn.disconnect() }
         } catch (e: Exception) { null }
     }
 
-    suspend fun fetchMyInfo(token: String): UserProfile? = withContext(Dispatchers.IO) {
-        parseUserInfo(get(MY_INFO, token) ?: return@withContext null)
+    private fun magappxUa(token: String): String =
+        "Mozilla/5.0 (Linux; Android 16; Pixel 8) MAGAPPX|6.4.0-2.90-30042|Android 16 google Pixel 8|shuidan|koPx4DY3tw7hrg5nKpSmc3|88af41c4c24832860d97d44e436f8842|174e1e66702c31aa7e949f5ab30db60b|$token"
+
+    /** A70-05：官方 getUserInfo 走 POST form（nextclient auth.ts 已验证路径）；GET 无 id 不可用 */
+    private fun postForm(url: String, token: String, form: String): String? {
+        return try {
+            val conn = URL(url).openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.doOutput = true
+            conn.connectTimeout = 12000
+            conn.readTimeout = 15000
+            conn.setRequestProperty("User-Agent", magappxUa(token))
+            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+            try {
+                conn.outputStream.use { it.write(form.toByteArray(Charsets.UTF_8)) }
+                conn.inputStream.bufferedReader().readText()
+            } finally { conn.disconnect() }
+        } catch (e: Exception) { null }
+    }
+
+    /**
+     * 本人资料（A70-05）：POST {id: userId}——userId 来自登录响应（SessionStore 持久化）。
+     * userId<=0（旧会话残留无 id）返回 null，UI 呈失败并引导重登，不冒充空资料。
+     */
+    suspend fun fetchMyInfo(token: String, userId: Long): UserProfile? = withContext(Dispatchers.IO) {
+        if (userId <= 0L) return@withContext null
+        parseUserInfo(postForm(MY_INFO, token, "id=$userId") ?: return@withContext null)
     }
 
     suspend fun fetchVisitors(token: String): List<PersonItem> = withContext(Dispatchers.IO) {

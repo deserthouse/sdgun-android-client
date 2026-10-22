@@ -2,7 +2,9 @@ package io.github.deserthouse.sdgun.feature.account
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Settings
@@ -10,6 +12,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -21,13 +24,14 @@ import androidx.compose.ui.unit.dp
 import io.github.deserthouse.sdgun.core.model.UiState
 import io.github.deserthouse.sdgun.data.repository.ProfileRepository
 
-/** 个人中心（G3）：getUserInfo 明文 dict 渲染；工具栏齿轮=设置入口（A70-02：设置属于"我的"）。 */
+/** 个人中心（G3）：getUserInfo 明文 dict 渲染；齿轮=设置、退出登录经 SessionManager（A70-03 闭环）。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfilePage(
     state: UiState<ProfileRepository.UserProfile>,
     onBack: () -> Unit,
     onOpenSettings: () -> Unit = {},
+    onLogout: () -> Unit = {},
 ) {
     Scaffold(
         topBar = {
@@ -64,6 +68,10 @@ fun ProfilePage(
                     p.score?.let { Text("积分：$it", style = MaterialTheme.typography.bodyMedium) }
                     p.sign?.let { Text("签名：$it", style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) {
+                        Text("退出登录（清除本机会话）")
+                    }
                 }
             }
 

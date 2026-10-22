@@ -93,6 +93,8 @@ class MainActivity : ComponentActivity() {
 
         // S1-9：调试桥可经设置页关闭（默认开）；release 构建永不注册
         val prefs = AppPrefs(applicationContext)
+        // A70-03：会话单入口初始化（登录/退出唯一写路=SessionStore.onLogin/onLogout）
+        io.github.deserthouse.sdgun.core.session.SessionManager.init(prefs)
         val debugBridgeEnabled = prefs.debugBridge.value
         if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0 && debugBridgeEnabled) {
             debugJsReceiver = object : BroadcastReceiver() {
@@ -478,6 +480,7 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
         // ── 一级 tab 3：我的（G3）——游客态内嵌登录面；齿轮=设置（设置属于"我的"）──
         composable("profile") {
             val token by prefs.apiToken.collectAsState()
+            val userId by prefs.apiUserId.collectAsState()
             TabShell(activeIdx = 3, onTab = { navigateTab(it) }) {
                 if (token.isBlank()) {
                     LoginScreen(
@@ -490,10 +493,11 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                     var pState by remember(token) {
                         mutableStateOf<UiState<ProfileRepository.UserProfile>>(UiState.InitialLoading)
                     }
-                    LaunchedEffect(token) {
-                        val p = ProfileRepository.fetchMyInfo(token)
+                    LaunchedEffect(token, userId) {
+                        // A70-05：POST {id:userId} 官方契约；旧残留会话无 id → null=失败引导重登
+                        val p = ProfileRepository.fetchMyInfo(token, userId)
                         pState = if (p == null) {
-                            UiState.RetryableError("个人资料拉取失败，请重进本页")
+                            UiState.RetryableError("个人资料拉取失败，请退出后重新登录")
                         } else {
                             UiState.Data(p)
                         }
@@ -502,6 +506,9 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                         state = pState,
                         onBack = {},
                         onOpenSettings = { navController.navigate("settings") },
+                        onLogout = {
+                            io.github.deserthouse.sdgun.core.session.SessionManager.store.onLogout()
+                        },
                     )
                 }
             }

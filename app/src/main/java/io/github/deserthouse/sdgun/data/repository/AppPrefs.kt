@@ -51,21 +51,28 @@ class AppPrefs(context: Context) {
     private val _apiAccount = MutableStateFlow(sp.getString(KEY_API_ACCOUNT, "") ?: "")
     val apiAccount: StateFlow<String> = _apiAccount
 
+    /** 登录用户 id（getUserInfo POST {id} 契约必需，A70-05） */
+    private val _apiUserId = MutableStateFlow(sp.getLong(KEY_API_USER_ID, 0L))
+    val apiUserId: StateFlow<Long> = _apiUserId
+
     /** 客户端本地设备身份（utdid），首取现生成，终身不变 */
     val utdid: String = sp.getString(KEY_UTDID, "") ?: SdApi.newUtdid(System.nanoTime()).also {
         sp.edit().putString(KEY_UTDID, it).apply()
     }
 
-    fun setApiSession(token: String, account: String) {
-        sp.edit().putString(KEY_API_TOKEN, token).putString(KEY_API_ACCOUNT, account).apply()
+    fun setApiSession(token: String, account: String, userId: Long = 0L) {
+        sp.edit().putString(KEY_API_TOKEN, token).putString(KEY_API_ACCOUNT, account)
+            .putLong(KEY_API_USER_ID, userId).apply()
         _apiToken.value = token
         _apiAccount.value = account
+        _apiUserId.value = userId
     }
 
     fun clearApiSession() {
-        sp.edit().remove(KEY_API_TOKEN).remove(KEY_API_ACCOUNT).apply()
+        sp.edit().remove(KEY_API_TOKEN).remove(KEY_API_ACCOUNT).remove(KEY_API_USER_ID).apply()
         _apiToken.value = ""
         _apiAccount.value = ""
+        _apiUserId.value = 0L
     }
 
     private companion object {
@@ -77,6 +84,7 @@ class AppPrefs(context: Context) {
 
         const val KEY_API_TOKEN = "api_token"
         const val KEY_API_ACCOUNT = "api_account"
+        const val KEY_API_USER_ID = "api_user_id"
         const val KEY_UTDID = "api_utdid"
     }
 }

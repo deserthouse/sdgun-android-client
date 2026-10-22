@@ -152,7 +152,9 @@ fun LoginScreen(
                     scope.launch {
                         when (val r = SdApi.login(account, password, prefs.utdid, securityCode)) {
                             is SdApi.LoginResult.Ok -> {
-                                prefs.setApiSession(r.token, account)
+                                // A70-03：登录唯一写路=SessionManager（epoch 推进+prefs 持久化一体）
+                                io.github.deserthouse.sdgun.core.session.SessionManager.store
+                                    .onLogin(r.token, account, r.userId)
                                 onLoggedIn()
                             }
                             is SdApi.LoginResult.CaptchaRequired -> {
@@ -218,7 +220,10 @@ fun AccountScreen(
                     )
                 }
             }
-            TextButton(onClick = { prefs.clearApiSession() }, modifier = Modifier.fillMaxWidth()) {
+            TextButton(
+                onClick = { io.github.deserthouse.sdgun.core.session.SessionManager.store.onLogout() },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Text("退出登录（清除本机会话）")
             }
         }
