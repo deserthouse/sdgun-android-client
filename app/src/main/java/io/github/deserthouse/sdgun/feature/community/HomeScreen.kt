@@ -2,7 +2,6 @@ package io.github.deserthouse.sdgun.feature.community
 import android.view.ViewGroup
 import io.github.deserthouse.sdgun.feature.media.GalleryScreen
 import io.github.deserthouse.sdgun.core.designsystem.prettyTitle
-import io.github.deserthouse.sdgun.feature.community.activeTab
 import io.github.deserthouse.sdgun.core.designsystem.ErrorOverlay
 import io.github.deserthouse.sdgun.compat.web.ExternalLinkDialog
 import io.github.deserthouse.sdgun.core.designsystem.AppBottomBar
@@ -86,7 +85,6 @@ fun HomeScreen(
     prefs: AppPrefs,
     state: WebState,
     webView: WebView,
-    onOpenSettings: () -> Unit,
     onOpenNews: () -> Unit,
     onNavigateTab: (Int) -> Unit,
 ) {
@@ -189,10 +187,10 @@ fun HomeScreen(
                     )
                 }
                 AppBottomBar(
-                    activeIdx = activeTab(state.currentUrl, state.intendedTab),
-                    // A-08：统一走 navigateTab（意图记录+重选当前 tab 不重载），由组合层注入
+                    // A70-02：兼容 WebView 页不在 tab 模型内，不反推全局选中（-1=无选中）；
+                    // 网页 URL 只描述本页内部状态，全局 tab 由导航 route 推导
+                    activeIdx = -1,
                     onTab = onNavigateTab,
-                    onOpenSettings = onOpenSettings,
                 )
             }
         },

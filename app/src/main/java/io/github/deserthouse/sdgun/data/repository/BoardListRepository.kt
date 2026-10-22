@@ -58,6 +58,10 @@ object BoardListRepository {
         val rows: List<ThreadRow>,
         val page: Int,
         val totalPages: Int,
+        /** 2026-10-22 实测：登录限定板块 success=false + msg="尚未登录"（无 list 字段） */
+        val authRequired: Boolean = false,
+        /** success=false 时的服务端消息（权限不足等） */
+        val errorMsg: String? = null,
     )
 
     /** 解析 forumView JSON → 行列表（纯函数，JVM 可测） */
@@ -68,7 +72,9 @@ object BoardListRepository {
             (0 until arr.length()).mapNotNull { i ->
                 val r = arr.optJSONObject(i) ?: return@mapNotNull null
                 val tid = r.optLong("tid", 0L)
-                val title = r.optString("title").trim()
+                // 标题含裸 HTML（实测 <img src=…> 直出上屏）——剥标签只留文本
+                val title = r.optString("title")
+                    .replace(Regex("<[^>]*>"), "").trim()
                 if (tid <= 0 || title.isBlank()) return@mapNotNull null
                 ThreadRow(
                     tid = tid,
@@ -153,10 +159,22 @@ object BoardListRepository {
             conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 16; Pixel 8)")
             try {
                 val body = conn.inputStream.bufferedReader().readText()
-                val rows = parseRows(body)
                 val obj = runCatching { JSONObject(body) }.getOrNull()
-                val totalPages = obj?.optInt("total_page", 1)?.takeIf { it > 0 } ?: 1
-                if (rows.isEmpty() && page > 1) null else PageResult(rows, page, totalPages)
+                // 信封先行：success=false 是服务端明确拒绝（登录限定板块/权限不足），
+                // 不得吞成"空板块"——按消息分型（A70-05 失败分型）
+                if (obj?.optBoolean("success", true) == false) {
+                    val msg = obj.optString("msg").takeIf { it.isNotBlank() } ?: "服务端拒绝访问"
+                    return@withContext PageResult(
+                        rows = emptyList(), page = page, totalPages = page,
+                        authRequired = msg.contains("登录"), errorMsg = msg,
+                    )
+                }
+                val rows = parseRows(body)
+                // forumView 信封无 total_page 字段（2026-10-22 实测 fid=198 翻到 p=49 空页）：
+                // 末页以空 list 标记，翻页依据=本页有行则可尝试下一页；
+                // 空页返回结果对象（null 只代表传输层失败，两者必须可区分）
+                val totalPages = if (rows.isEmpty()) page else page + 1
+                PageResult(rows, page, totalPages)
             } finally {
                 conn.disconnect()
             }

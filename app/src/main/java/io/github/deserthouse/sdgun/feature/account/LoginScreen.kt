@@ -13,6 +13,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -52,6 +53,9 @@ fun LoginScreen(
     prefs: AppPrefs,
     onBack: () -> Unit,
     onLoggedIn: () -> Unit,
+    /** tab 内嵌（消息/我的游客面）时给设置入口——A70 接线后设置不再在底栏，
+     *  游客的唯一设置路径经此齿轮；独立登录路由不传=不显示 */
+    onOpenSettings: (() -> Unit)? = null,
 ) {
     var account by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -69,6 +73,13 @@ fun LoginScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    if (onOpenSettings != null) {
+                        IconButton(onClick = onOpenSettings) {
+                            Icon(Icons.Outlined.Settings, contentDescription = "设置")
+                        }
                     }
                 },
             )

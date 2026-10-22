@@ -50,11 +50,10 @@ fun SettingsScreen(
 
     Scaffold(
         bottomBar = {
-            // C-5：设置页底栏常驻，与其他 tab 行为一致
+            // C-5：设置页底栏常驻；A70-02：设置属于"我的"，高亮 3（恰好一个选中项）
             AppBottomBar(
                 activeIdx = 3,
                 onTab = onTab,
-                onOpenSettings = { /* 已在设置页 */ },
             )
         },
         topBar = {

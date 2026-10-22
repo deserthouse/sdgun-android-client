@@ -8,11 +8,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -33,12 +40,19 @@ fun BoardPage(
     state: UiState<BoardListRepository.PageResult>,
     meta: BoardListRepository.BoardMeta?,
     onOpenThread: (Long, String) -> Unit,
+    onBack: () -> Unit = {},
+    onLoadMore: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
         modifier = modifier,
         topBar = {
             TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
                 title = {
                     Text(
                         meta?.name ?: "板块",
@@ -76,10 +90,18 @@ fun BoardPage(
                 Text(state.error, style = MaterialTheme.typography.bodyLarge)
             }
 
+            is UiState.AuthRequired -> Column(
+                Modifier.fillMaxSize().padding(padding),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text("该板块需要登录后查看", style = MaterialTheme.typography.bodyLarge)
+            }
+
             is UiState.Stale<*> -> {
                 val pr = state.stale as? BoardListRepository.PageResult
                 if (pr != null) {
-                    Column(Modifier.padding(padding)) {
+                    Column(Modifier.padding(padding).verticalScroll(rememberScrollState())) {
                         Text(
                             state.error,
                             style = MaterialTheme.typography.labelMedium,
@@ -89,6 +111,7 @@ fun BoardPage(
                         pr.rows.forEach { row ->
                             ThreadRowItem(row) { onOpenThread(row.tid, row.title) }
                         }
+                        MoreRow(pr, onLoadMore)
                     }
                 }
             }
@@ -96,16 +119,28 @@ fun BoardPage(
             is UiState.Data<*> -> {
                 val pr = state.value as? BoardListRepository.PageResult
                 if (pr != null) {
-                    Column(Modifier.padding(padding)) {
+                    Column(Modifier.padding(padding).verticalScroll(rememberScrollState())) {
                         pr.rows.forEach { row ->
                             ThreadRowItem(row) { onOpenThread(row.tid, row.title) }
                         }
+                        MoreRow(pr, onLoadMore)
                     }
                 }
             }
 
             else -> {}
         }
+    }
+}
+
+/** 下一页入口：仓库 total_page 权威（A70-06 前置：板块不因首页渲染而丢失第二页） */
+@Composable
+private fun MoreRow(pr: BoardListRepository.PageResult, onLoadMore: (() -> Unit)?) {
+    if (onLoadMore != null && pr.page < pr.totalPages) {
+        TextButton(
+            onClick = onLoadMore,
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        ) { Text("加载更多") }
     }
 }
 
