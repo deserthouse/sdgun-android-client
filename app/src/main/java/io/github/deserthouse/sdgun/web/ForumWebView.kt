@@ -62,6 +62,10 @@ class WebState {
     /** 深链计数（A-08）：handleViewIntent 消费论坛深链后递增，
      *  UI 层据此把路由切回 home（否则内容在 WebView 里加载而路由停在设置页）。 */
     var deepLinkTick by mutableIntStateOf(0)
+
+    /** A29：shuidan:// 等 scheme 命中原生路由时，由 handleViewIntent 写入、AppRoot 消费 */
+    var pendingNativeRoute by mutableStateOf<String?>(null)
+    var nativeRouteTick by mutableIntStateOf(0)
         internal set
 
     /** 图片查看器（AF-03）：null=关闭；非 null=全屏查看器展示该图组 */

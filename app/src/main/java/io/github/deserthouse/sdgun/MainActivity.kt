@@ -158,7 +158,18 @@ class MainActivity : ComponentActivity() {
 
     /** 处理论坛链接唤起；返回是否消费了 URL */
     private fun handleViewIntent(intent: android.content.Intent): Boolean {
-        val url = intent.data?.toString() ?: return false
+        val uri = intent.data ?: return false
+        // A29：站方 scheme（shuidan://forumThreadList?fid=&circleId=）→ 原生板块页；
+        // 未知 shuidan host 一律消费（不让死链接落到浏览器）
+        if (uri.scheme == "shuidan") {
+            val fid = uri.getQueryParameter("fid")?.toLongOrNull()
+            if (fid != null && fid > 0L) {
+                state.pendingNativeRoute = "board/$fid"
+                state.nativeRouteTick++
+            }
+            return true
+        }
+        val url = uri.toString()
         return if (UrlRules.classify(url) is UrlRules.Verdict.Internal) {
             webView.loadUrl(UrlRules.normalizeInternal(url))
             // A-08：深链可能发生在设置页路由上——通知 UI 把路由切回 home，
@@ -194,7 +205,6 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
             3 -> "profile"
             else -> return
         }
-        android.util.Log.d("NavTab", "tap$index -> $route stack=${navController.currentBackStack.value.joinToString(",") { it.destination.route ?: "null" }}")
         navController.navigate(route) {
             popUpTo("focus") { saveState = true }
             launchSingleTop = true
@@ -212,6 +222,15 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
     LaunchedEffect(Unit) {
         state.requestImagePick = { req ->
             if (req.multiple) multiPicker.launch(req.mimeType) else singlePicker.launch(req.mimeType)
+        }
+    }
+
+    // A29：shuidan:// 等命中原生路由时跳转（板块/帖子参数路由）
+    LaunchedEffect(state.nativeRouteTick) {
+        val route = state.pendingNativeRoute
+        if (state.nativeRouteTick > 0 && route != null) {
+            navController.navigate(route) { launchSingleTop = true }
+            state.pendingNativeRoute = null
         }
     }
 

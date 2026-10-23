@@ -33,6 +33,13 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="bbs.sdgun.com.cn" />
             </intent-filter>
+            <!-- 站方 app scheme（circleTree link 字段原生形态，A29）：shuidan://forumThreadList?fid=&circleId= -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="shuidan" />
+            </intent-filter>
         </activity>
     </application>
 
