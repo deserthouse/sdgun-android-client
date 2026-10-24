@@ -28,8 +28,11 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -44,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.deserthouse.sdgun.core.model.UiState
 import io.github.deserthouse.sdgun.data.repository.NewsItem
+import io.github.deserthouse.sdgun.feature.thread.sampleSize
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -64,9 +68,32 @@ fun FocusPage(
     onLoadMore: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // A24-04：每频道独立滚动位置（同一组合位不再跨频道共享状态）
-    val listStates = remember { mutableMapOf<FocusChannel, androidx.compose.foundation.lazy.LazyListState>() }
-    val listState = listStates.getOrPut(currentChannel) { androidx.compose.foundation.lazy.rememberLazyListState() }
+    // A24-04/R2：每频道独立滚动位置——keyed 子组合件承载（频道切换即切换组合节点，
+    // 各节点自有 rememberLazyListState；避免条件性 remember 的组合位错挂）
+    key(currentChannel) {
+        FocusFeed(
+            state = state, currentChannel = currentChannel, channels = channels,
+            onChannelSelect = onChannelSelect, onOpenLink = onOpenLink, onRetry = onRetry,
+            hasMore = hasMore, loadingMore = loadingMore, onLoadMore = onLoadMore,
+            modifier = modifier,
+        )
+    }
+}
+
+@Composable
+private fun FocusFeed(
+    state: StateFlow<UiState<List<NewsItem>>>,
+    currentChannel: FocusChannel,
+    channels: List<FocusChannel>,
+    onChannelSelect: (FocusChannel) -> Unit,
+    onOpenLink: (String) -> Unit,
+    onRetry: () -> Unit,
+    hasMore: Boolean,
+    loadingMore: Boolean,
+    onLoadMore: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val listState = rememberLazyListState()
     val ui by state.collectAsState()
     Scaffold(
         modifier = modifier,
@@ -189,6 +216,11 @@ private fun FeedCard(item: NewsItem, onClick: () -> Unit) {
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
     ) {
         Column(Modifier.padding(12.dp)) {
+            // R3：封面渲染（有界解码，失败静默无占位——摘要为主视觉）
+            item.coverUrl?.let { url ->
+                FocusCover(url = url)
+                Spacer(Modifier.height(6.dp))
+            }
             Text(item.title, style = MaterialTheme.typography.titleSmall,
                 maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (item.summary.isNotBlank()) {
@@ -209,6 +241,40 @@ private fun FeedCard(item: NewsItem, onClick: () -> Unit) {
             )
         }
     }
+}
+
+/** R3：聚焦封面（有界解码，宽/高比修正沿用 A24-05 语义；失败=不渲染）。 */
+@Composable
+private fun FocusCover(url: String) {
+    var bitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(url) {
+        bitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 8000
+                conn.readTimeout = 12000
+                try {
+                    val bytes = conn.inputStream.use { it.readBytes() }
+                    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                    val opts = android.graphics.BitmapFactory.Options().apply {
+                        inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, 1600)
+                    }
+                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                } finally {
+                    conn.disconnect()
+                }
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+    val bmp = bitmap ?: return
+    androidx.compose.foundation.Image(
+        bitmap = bmp.asImageBitmap(),
+        contentDescription = null,
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 @Composable

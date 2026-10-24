@@ -53,6 +53,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.Text
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.toArgb
@@ -201,6 +208,12 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
     // A70-02：根目的地=四 tab 本身（聚焦/社区/消息/我的），全局选中由 route 单源推导；
     // 网页 URL 只描述兼容 WebView 页内部状态，不再反推 tab。
     // launchSingleTop=重选当前 tab 不重复入栈（不重载）；saveState/restoreState 保各 tab 状态
+    // R4：搜索入口——落兼容壳搜索页（WebView 已载 site search；mag1 无帖子搜索 API）
+    fun openCompatSearch() {
+        webView.loadUrl(UrlRules.normalizeInternal("https://bbs.sdgun.com.cn/search.php?mod=forum&mobile=2"))
+        navController.navigate("home") { launchSingleTop = true }
+    }
+
     fun navigateTab(index: Int) {
         val route = when (index) {
             0 -> "focus"
@@ -299,7 +312,7 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
             val vm = remember { FocusViewModel(FocusRepository(), scope) }
             var channel by remember { mutableStateOf(FocusChannel.LATEST) }
             LaunchedEffect(Unit) { vm.select(channel) }
-            TabShell(activeIdx = 0, onTab = { navigateTab(it) }) {
+            TabShell(activeIdx = 0, onTab = { navigateTab(it) }, onSearch = { openCompatSearch() }) {
                 FocusPage(
                     state = vm.state(channel),
                     channels = FocusChannel.entries.toList(),
@@ -331,7 +344,7 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                 }
                 myBoards = BoardRepository.fetchMyCircles()
             }
-            TabShell(activeIdx = 1, onTab = { navigateTab(it) }) {
+            TabShell(activeIdx = 1, onTab = { navigateTab(it) }, onSearch = { openCompatSearch() }) {
                 CommunityPage(
                     state = treeState,
                     myBoards = myBoards,
@@ -479,6 +492,7 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                 onToggleOrder = { tvm.toggleOrder(tid) },
                 onTogglePoster = { tvm.togglePoster(tid) },
                 onLoadMore = { tvm.loadMore(tid) },
+                onRetryFloors = { tvm.retryFloors(tid) },
                 onBack = { navController.popBackStack() },
                 isLoggedIn = mutToken.isNotBlank(),
                 applaudStates = applaudStates,
@@ -532,7 +546,7 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
         // ── 一级 tab 2：消息（G3）——游客态 tab 内嵌登录面（门禁不跳路由，选中态不漂移）──
         composable("messages") {
             val token by prefs.apiToken.collectAsState()
-            TabShell(activeIdx = 2, onTab = { navigateTab(it) }) {
+            TabShell(activeIdx = 2, onTab = { navigateTab(it) }, onSearch = { openCompatSearch() }) {
                 if (token.isBlank()) {
                     LoginScreen(
                         prefs = prefs,
@@ -562,7 +576,7 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
         composable("profile") {
             val token by prefs.apiToken.collectAsState()
             val userId by prefs.apiUserId.collectAsState()
-            TabShell(activeIdx = 3, onTab = { navigateTab(it) }) {
+            TabShell(activeIdx = 3, onTab = { navigateTab(it) }, onSearch = { openCompatSearch() }) {
                 if (token.isBlank()) {
                     LoginScreen(
                         prefs = prefs,
@@ -662,14 +676,27 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
 
 /** 一级 tab 壳（A70-01）：底栏唯一挂载点——四个根路由共用；detail/兼容页不挂底栏，
  *  保证任何时刻底栏可见时恰好一个选中项（A70-02）。 */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TabShell(
     activeIdx: Int,
     onTab: (Int) -> Unit,
+    onSearch: () -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.surface,
+        topBar = {
+            // R4：原生导航搜索入口——落兼容壳搜索页（mag1 无帖子搜索 API，搜索永久岛）
+            TopAppBar(
+                title = { Text("SDGun") },
+                actions = {
+                    IconButton(onClick = onSearch) {
+                        Icon(Icons.Filled.Search, contentDescription = "搜索")
+                    }
+                },
+            )
+        },
         bottomBar = { AppBottomBar(activeIdx = activeIdx, onTab = onTab) },
     ) { padding ->
         // 只消费 bottom：页内自持 Scaffold 的 TopAppBar 已处理状态栏 inset，

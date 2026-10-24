@@ -60,6 +60,7 @@ fun ThreadPage(
     onToggleOrder: () -> Unit,
     onTogglePoster: () -> Unit,
     onLoadMore: () -> Unit,
+    onRetryFloors: () -> Unit,
     onBack: () -> Unit,
     // G4 写操作（路由层持有状态与提交；本页只渲染+回调）
     isLoggedIn: Boolean,
@@ -175,7 +176,7 @@ fun ThreadPage(
                             onToggleOrder = onToggleOrder, onTogglePoster = onTogglePoster,
                         )
                     }
-                    floorsItems(floorsState, applaudStates, applaudedIds, onApplaud, openViewer)
+                    floorsItems(floorsState, applaudStates, applaudedIds, onApplaud, onRetryFloors, onLoadMore, openViewer)
                     moreItem(floorsState, onLoadMore)
                 }
             }
@@ -212,6 +213,8 @@ private fun LazyListScope.floorsItems(
     applaudStates: Map<Long, WriteUi>,
     applaudedIds: Set<Long>,
     onApplaud: (Long) -> Unit,
+    onRetryFloors: () -> Unit,
+    onLoadMore: () -> Unit,
     onOpenImage: (List<String>, Int) -> Unit,
 ) {
     when (val fs = floorsState) {
@@ -223,6 +226,15 @@ private fun LazyListScope.floorsItems(
         is UiState.Empty -> item(key = "floors_empty") {
             Text("暂无楼层", Modifier.fillMaxWidth().padding(16.dp),
                 style = MaterialTheme.typography.bodyMedium)
+        }
+
+        is UiState.RetryableError -> item(key = "floors_retry") {
+            // R1 主修：失败不再静默空白——文案+重试钮（审计 R1）
+            Column(Modifier.fillMaxWidth().padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("楼层加载失败", style = MaterialTheme.typography.bodyLarge)
+                TextButton(onClick = onRetryFloors) { Text("重试") }
+            }
         }
 
         is UiState.Stale<ThreadRepository.FloorsPage> -> {
@@ -239,7 +251,17 @@ private fun LazyListScope.floorsItems(
             floorEntries(fs.stale, applaudStates, applaudedIds, onApplaud, onOpenImage)
         }
 
-        is UiState.Data<ThreadRepository.FloorsPage> -> floorEntries(fs.value, applaudStates, applaudedIds, onApplaud, onOpenImage)
+        is UiState.Data<ThreadRepository.FloorsPage> -> {
+            floorEntries(fs.value, applaudStates, applaudedIds, onApplaud, onOpenImage)
+            // R1：more 行不随筛选消失（挂在分支尾，page<totalPages 才显示）
+            if (fs.value.page < fs.value.totalPages) {
+                item(key = "more") {
+                    TextButton(onClick = onLoadMore, modifier = Modifier.fillMaxWidth()) {
+                        Text("加载更多楼层")
+                    }
+                }
+            }
+        }
 
         else -> {}
     }

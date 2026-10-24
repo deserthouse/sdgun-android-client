@@ -47,6 +47,11 @@ object ThreadRepository {
         val createTime: String?,
         val applaudCount: Int?,
         val isPublisher: Boolean,
+        /** R6：被引用楼层摘要（to_comment；空=无引用） */
+        val quoteAuthor: String? = null,
+        val quoteText: String? = null,
+        /** R7：视频附件 URL（非空=有视频，UI 给外链占位） */
+        val videoUrl: String? = null,
     )
 
     data class FloorsPage(
@@ -105,6 +110,13 @@ object ThreadRepository {
                     createTime = f.optString("time").takeIf { it.isNotBlank() && it != "null" },
                     applaudCount = f.optInt("applaud_count", -1).takeIf { it >= 0 },
                     isPublisher = f.optBoolean("is_publisher"),
+                    // R6 引用 / R7 视频（to_comment 形态=作者+正文；videos=外链数组首项）
+                    quoteAuthor = f.optJSONObject("to_comment")?.optString("user_name")
+                        ?.takeIf { it.isNotBlank() && it != "null" },
+                    quoteText = f.optJSONObject("to_comment")?.optString("content")
+                        ?.takeIf { it.isNotBlank() && it != "null" },
+                    videoUrl = f.optJSONArray("videos")?.optString(0)
+                        ?.takeIf { it.startsWith("http") },
                 )
             }
             FloorsPage(

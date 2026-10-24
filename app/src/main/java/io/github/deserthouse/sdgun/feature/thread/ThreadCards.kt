@@ -31,6 +31,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.Image
@@ -198,8 +199,35 @@ fun FloorCard(
             )
         }
         Spacer(Modifier.height(4.dp))
+        // R6：引用块（被引用作者+摘要，语义引用样式）
+        floor.quoteAuthor?.let { qa ->
+            Column(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(8.dp),
+            ) {
+                Text(qa, style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium)
+                floor.quoteText?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+        }
         blocks.forEach { block ->
             BlockView(block, group, onOpenImage)
+        }
+        // R7：视频附件占位（URL 非空=有视频，外链打开）
+        floor.videoUrl?.let { vu ->
+            Row(Modifier.fillMaxWidth().padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text("▶ 视频附件（点击外链打开）",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary)
+            }
         }
         Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
             floor.createTime?.let {
