@@ -10,8 +10,10 @@ import io.github.deserthouse.sdgun.feature.feed.FocusViewModel
 import io.github.deserthouse.sdgun.feature.community.HomeScreen
 import io.github.deserthouse.sdgun.feature.community.CommunityPage
 import io.github.deserthouse.sdgun.feature.community.BoardPage
+import io.github.deserthouse.sdgun.feature.community.BoardViewModel
 import io.github.deserthouse.sdgun.feature.thread.ReplySheet
 import io.github.deserthouse.sdgun.feature.thread.ThreadPage
+import io.github.deserthouse.sdgun.feature.thread.ThreadViewModel
 import io.github.deserthouse.sdgun.feature.account.AccountScreen
 import io.github.deserthouse.sdgun.feature.account.LoginScreen
 import io.github.deserthouse.sdgun.feature.account.ProfilePage
@@ -344,76 +346,23 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
         composable("board/{fid}?name={name}") { entry ->
             val fid = entry.arguments?.getString("fid")?.toLongOrNull() ?: 0L
             val fallbackName = entry.arguments?.getString("name") ?: ""
-            val scope = rememberCoroutineScope()
-            var listState by remember(fid) {
-                mutableStateOf<UiState<BoardListRepository.PageResult>>(UiState.InitialLoading)
-            }
-            var meta by remember(fid) { mutableStateOf<BoardListRepository.BoardMeta?>(null) }
-            var rows by remember(fid) {
-                mutableStateOf<List<BoardListRepository.ThreadRow>>(emptyList())
-            }
-            var page by remember(fid) { mutableIntStateOf(1) }
-            var totalPages by remember(fid) { mutableIntStateOf(1) }
-
-            fun load(reset: Boolean) {
-                val p = if (reset) 1 else page + 1
-                scope.launch {
-                    val pr = BoardListRepository.fetchPage(fid, p)
-                    if (reset) {
-                        listState = when {
-                            pr == null -> UiState.RetryableError("板块拉取失败，请重试")
-                            pr.authRequired -> UiState.AuthRequired
-                            pr.errorMsg != null -> UiState.RetryableError(pr.errorMsg)
-                            pr.rows.isEmpty() -> UiState.Empty()
-                            else -> {
-                                page = 1; totalPages = pr.totalPages; rows = pr.rows
-                                UiState.Data(pr)
-                            }
-                        }
-                    } else when {
-                        pr == null -> // null=仅传输层失败：保留旧页，游标不推进
-                            listState = UiState.Stale(
-                                BoardListRepository.PageResult(rows, page, totalPages),
-                                "下一页加载失败，可重试",
-                            )
-                        pr.rows.isEmpty() -> // 服务端空页=末页（实测契约）：静默收尾
-                            totalPages = page
-                        pr.errorMsg != null ->
-                            listState = UiState.Stale(
-                                BoardListRepository.PageResult(rows, page, totalPages),
-                                pr.errorMsg,
-                            )
-                        else -> {
-                            page = pr.page
-                            totalPages = pr.totalPages
-                            rows = (rows + pr.rows).distinctBy { it.tid }
-                            listState = UiState.Data(
-                                BoardListRepository.PageResult(rows, page, totalPages)
-                            )
-                        }
-                    }
-                }
-            }
-
-            LaunchedEffect(fid) {
-                if (fid > 0L) {
-                    load(true)
-                    meta = BoardListRepository.fetchBoardMeta(fid)
-                }
-            }
+            // A24-06：状态迁入 BoardViewModel（代际+互斥+空尾页原子；MainActivity 只留路由接线）
+            val bvmScope = rememberCoroutineScope()
+            val bvm = remember(fid) { BoardViewModel(bvmScope) }
+            LaunchedEffect(fid) { if (fid > 0L) bvm.start(fid) }
             if (fid <= 0L) {
                 LaunchedEffect(Unit) { navController.popBackStack() }
             } else {
                 BoardPage(
-                    state = listState,
-                    meta = meta ?: BoardListRepository.BoardMeta(
+                    state = bvm.listState,
+                    meta = bvm.meta ?: BoardListRepository.BoardMeta(
                         fid = fid, name = fallbackName, iconUrl = null, postToday = null,
                         threadCount = null, postCount = null,
                         orders = emptyList(), threadTypes = emptyList(),
                     ),
                     onOpenThread = { tid, _ -> navController.navigate("thread/$tid/$fid") },
                     onBack = { navController.popBackStack() },
-                    onLoadMore = { load(false) },
+                    onLoadMore = { bvm.loadMore(fid) },
                 )
             }
         }
@@ -454,12 +403,11 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                     ) { st -> onState(st) }
                 }
             }
-            var opState by remember(tid) {
-                mutableStateOf<UiState<ThreadRepository.ThreadOP>>(UiState.InitialLoading)
-            }
-            var floorsState by remember(tid) {
-                mutableStateOf<UiState<ThreadRepository.FloorsPage>>(UiState.InitialLoading)
-            }
+            // A24-06：读态迁入 ThreadViewModel（代际+取消+互斥+空尾页原子）
+            val tvmScope = rememberCoroutineScope()
+            val tvm = remember(tid) { ThreadViewModel(tvmScope) }
+            val opState = tvm.opState
+            val floorsState = tvm.floorsState
             fun doApplaud(pid: Long) {
                 if (mutToken.isBlank()) { navigateTab(3); return }
                 val ui = applaudStates[pid]
@@ -521,60 +469,16 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                 }
             }
 
-            var descending by remember(tid) { mutableStateOf(false) }
-            var posterOnly by remember(tid) { mutableStateOf(false) }
-            var authorId by remember(tid) { mutableStateOf<Long?>(null) }
-            var floors by remember(tid) {
-                mutableStateOf<List<ThreadRepository.Floor>>(emptyList())
-            }
-            var floorPage by remember(tid) { mutableIntStateOf(1) }
-            var floorTotal by remember(tid) { mutableIntStateOf(1) }
-
-            fun loadFloors(reset: Boolean) {
-                val p = if (reset) 1 else floorPage + 1
-                val aid = if (posterOnly) authorId else null
-                scope.launch {
-                    val fp = ThreadRepository.fetchFloors(tid, p, descending, aid)
-                    if (fp == null) {
-                        floorsState = UiState.Stale(
-                            ThreadRepository.FloorsPage(floors, floorPage, floorTotal),
-                            "楼层加载失败，可重试",
-                        )
-                    } else {
-                        floorPage = fp.page
-                        floorTotal = fp.totalPages
-                        floors = if (reset) fp.floors
-                        else (floors + fp.floors).distinctBy { it.pid }
-                        floorsState = UiState.Data(
-                            ThreadRepository.FloorsPage(floors, floorPage, floorTotal)
-                        )
-                    }
-                }
-            }
-
-            LaunchedEffect(tid) {
-                if (tid <= 0L) return@LaunchedEffect
-                // G0-C01a：主楼在 threadView 独立端点；主楼成功后才拉楼层（authorId 供只看楼主）
-                val op = ThreadRepository.fetchOP(tid, fid)
-                opState = if (op == null) {
-                    UiState.RetryableError("主楼加载失败，请返回重试")
-                } else {
-                    UiState.Data(op)
-                }
-                if (op != null) {
-                    authorId = op.authorId
-                    loadFloors(true)
-                }
-            }
+            LaunchedEffect(tid) { if (tid > 0L) tvm.start(tid, fid) }
 
             ThreadPage(
                 opState = opState,
                 floorsState = floorsState,
-                descending = descending,
-                posterOnly = posterOnly,
-                onToggleOrder = { descending = !descending; loadFloors(true) },
-                onTogglePoster = { posterOnly = !posterOnly; loadFloors(true) },
-                onLoadMore = { loadFloors(false) },
+                descending = tvm.descending,
+                posterOnly = tvm.posterOnly,
+                onToggleOrder = { tvm.toggleOrder(tid) },
+                onTogglePoster = { tvm.togglePoster(tid) },
+                onLoadMore = { tvm.loadMore(tid) },
                 onBack = { navController.popBackStack() },
                 isLoggedIn = mutToken.isNotBlank(),
                 applaudStates = applaudStates,
@@ -617,7 +521,7 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                             if (st is MutationState.Confirmed) {
                                 DraftStore.clear(mutContext, draftOwner, tid)
                                 replyOpen = false
-                                loadFloors(true)
+                                tvm.retryFloors(tid)  // 回复成功刷新楼层（当前筛选代际）
                             }
                         }
                     },
