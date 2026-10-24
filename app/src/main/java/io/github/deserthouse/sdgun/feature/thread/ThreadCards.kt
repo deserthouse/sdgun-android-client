@@ -35,6 +35,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.Image
 import io.github.deserthouse.sdgun.core.model.MutationState
+import io.github.deserthouse.sdgun.core.model.WriteUi
+import io.github.deserthouse.sdgun.core.model.WriteUiPhase
 import io.github.deserthouse.sdgun.data.repository.ThreadRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -150,7 +152,7 @@ fun PostImage(url: String, onClick: () -> Unit) {
 @Composable
 fun FloorCard(
     floor: ThreadRepository.Floor,
-    applaudState: MutationState?,
+    applaudState: WriteUi,
     applauded: Boolean,
     onApplaud: (Long) -> Unit,
     onOpenImage: (List<String>, Int) -> Unit,
@@ -197,11 +199,12 @@ fun FloorCard(
             val count = floor.applaudCount?.let { if (applauded) it + 1 else it }
             TextButton(onClick = { onApplaud(floor.pid) }) {
                 Text(
-                    when (applaudState) {
-                        is MutationState.Submitting -> "…"
-                        is MutationState.Rejected -> "赞失败"
-                        is MutationState.OutcomeUnknown -> "待确认"
-                        else -> "赞 ${count ?: ""}".trim()
+                    when (applaudState.phase) {
+                        WriteUiPhase.Pending -> "…"
+                        WriteUiPhase.Done -> "已赞 ${count ?: ""}".trim()
+                        WriteUiPhase.Failed -> "赞失败"
+                        WriteUiPhase.Verify -> "待核对"
+                        WriteUiPhase.Idle -> "赞 ${count ?: ""}".trim()
                     },
                     style = MaterialTheme.typography.labelSmall,
                 )

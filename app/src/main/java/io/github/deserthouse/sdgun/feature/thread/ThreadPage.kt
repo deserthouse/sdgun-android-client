@@ -37,7 +37,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import io.github.deserthouse.sdgun.core.model.MutationState
+import io.github.deserthouse.sdgun.core.model.WriteUi
+import io.github.deserthouse.sdgun.core.model.WriteUiPhase
 import io.github.deserthouse.sdgun.core.model.UiState
 import io.github.deserthouse.sdgun.data.repository.ThreadRepository
 import io.github.deserthouse.sdgun.feature.media.GalleryScreen
@@ -62,11 +63,14 @@ fun ThreadPage(
     onBack: () -> Unit,
     // G4 写操作（路由层持有状态与提交；本页只渲染+回调）
     isLoggedIn: Boolean,
-    applaudStates: Map<Long, MutationState>,
+    applaudStates: Map<Long, WriteUi>,
     applaudedIds: Set<Long>,
     onApplaud: (Long) -> Unit,
+    verifyDialogFor: Long?,
+    onVerifyAck: (Long) -> Unit,
+    onVerifyDismiss: () -> Unit,
     isCollected: Boolean,
-    collectState: MutationState?,
+    collectState: WriteUi,
     onCollect: () -> Unit,
     onReply: () -> Unit,
     modifier: Modifier = Modifier,
@@ -76,6 +80,23 @@ fun ThreadPage(
     val openViewer: (List<String>, Int) -> Unit = { urls, i -> viewer = GalleryData(urls, i) }
     viewer?.let { g ->
         GalleryScreen(data = g, onClose = { viewer = null })
+    }
+
+    // A24-02：结果未知核对对话框——显式确认后才允许重发
+    verifyDialogFor?.let { pid ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = onVerifyDismiss,
+            confirmButton = {
+                TextButton(onClick = { onVerifyAck(pid) }) { Text("仍要重发") }
+            },
+            dismissButton = {
+                TextButton(onClick = onVerifyDismiss) { Text("取消") }
+            },
+            title = { Text("点赞结果待确认") },
+            text = {
+                Text("此前一次点赞未收到服务端确认（超时或断网）。请回到列表核对该楼层是否已显示点赞，再决定是否重发。")
+            },
+        )
     }
 
     Scaffold(
@@ -138,7 +159,7 @@ fun ThreadPage(
                         OpHeader(
                             op,
                             applauded = op.pid in applaudedIds,
-                            applaudState = applaudStates[op.pid],
+                            applaudState = applaudStates[op.pid] ?: WriteUi(),
                             isCollected = isCollected,
                             collectState = collectState,
                             onApplaud = { onApplaud(op.pid) },
@@ -188,7 +209,7 @@ private fun FloorControls(
 /** 楼层流（LazyListScope 扩展）：Data/Stale 两态都产出独立楼层项；Stale 先给横幅。 */
 private fun LazyListScope.floorsItems(
     floorsState: UiState<ThreadRepository.FloorsPage>,
-    applaudStates: Map<Long, MutationState>,
+    applaudStates: Map<Long, WriteUi>,
     applaudedIds: Set<Long>,
     onApplaud: (Long) -> Unit,
     onOpenImage: (List<String>, Int) -> Unit,
@@ -226,13 +247,13 @@ private fun LazyListScope.floorsItems(
 
 private fun LazyListScope.floorEntries(
     fp: ThreadRepository.FloorsPage,
-    applaudStates: Map<Long, MutationState>,
+    applaudStates: Map<Long, WriteUi>,
     applaudedIds: Set<Long>,
     onApplaud: (Long) -> Unit,
     onOpenImage: (List<String>, Int) -> Unit,
 ) {
     items(fp.floors, key = { "f_${it.pid}" }) { floor ->
-        FloorCard(floor, applaudStates[floor.pid], floor.pid in applaudedIds, onApplaud, onOpenImage)
+        FloorCard(floor, applaudStates[floor.pid] ?: WriteUi(), floor.pid in applaudedIds, onApplaud, onOpenImage)
     }
 }
 
@@ -255,9 +276,9 @@ private fun LazyListScope.moreItem(
 private fun OpHeader(
     op: ThreadRepository.ThreadOP,
     applauded: Boolean,
-    applaudState: MutationState?,
+    applaudState: WriteUi,
     isCollected: Boolean,
-    collectState: MutationState?,
+    collectState: WriteUi,
     onApplaud: () -> Unit,
     onCollect: () -> Unit,
 ) {
@@ -287,21 +308,23 @@ private fun OpHeader(
         Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = onApplaud) {
                 Text(
-                    when (applaudState) {
-                        is MutationState.Submitting -> "点赞中…"
-                        is MutationState.Rejected -> "点赞失败"
-                        is MutationState.OutcomeUnknown -> "点赞待确认"
-                        else -> if (applauded) "已点赞" else "点赞"
+                    when (applaudState.phase) {
+                        WriteUiPhase.Pending -> "点赞中…"
+                        WriteUiPhase.Done -> "已点赞"
+                        WriteUiPhase.Failed -> "点赞失败"
+                        WriteUiPhase.Verify -> "点赞待核对"
+                        WriteUiPhase.Idle -> if (applauded) "已点赞" else "点赞"
                     }
                 )
             }
             TextButton(onClick = onCollect) {
                 Text(
-                    when (collectState) {
-                        is MutationState.Submitting -> "收藏中…"
-                        is MutationState.Rejected -> "收藏失败"
-                        is MutationState.OutcomeUnknown -> "收藏待确认"
-                        else -> if (isCollected) "已收藏" else "收藏"
+                    when (collectState.phase) {
+                        WriteUiPhase.Pending -> "收藏中…"
+                        WriteUiPhase.Done -> "已收藏"
+                        WriteUiPhase.Failed -> "收藏失败"
+                        WriteUiPhase.Verify -> "收藏待核对"
+                        WriteUiPhase.Idle -> if (isCollected) "已收藏" else "收藏"
                     }
                 )
             }

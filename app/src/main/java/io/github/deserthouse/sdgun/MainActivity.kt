@@ -24,6 +24,8 @@ import io.github.deserthouse.sdgun.core.mutation.MutationKind
 import io.github.deserthouse.sdgun.core.mutation.MutationRequest
 import io.github.deserthouse.sdgun.core.mutation.MutationRunner
 import io.github.deserthouse.sdgun.core.model.MutationState
+import io.github.deserthouse.sdgun.core.model.WriteUi
+import io.github.deserthouse.sdgun.core.model.WriteUiPhase
 import io.github.deserthouse.sdgun.data.repository.DraftStore
 import io.github.deserthouse.sdgun.BuildConfig
 import io.github.deserthouse.sdgun.core.model.UiState
@@ -426,10 +428,17 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                 else HttpMutationGateway()
             var replyOpen by remember(tid) { mutableStateOf(false) }
             var replyState by remember(tid) { mutableStateOf<MutationState>(MutationState.Draft) }
-            val applaudStates = remember(tid) { mutableStateMapOf<Long, MutationState>() }
+            // A24-02：WriteUi 相位模型（Pending 保留乐观态 / Verify 禁直发需核对）
+            val applaudStates = remember(tid) { mutableStateMapOf<Long, WriteUi>() }
             val applaudedIds = remember(tid) { mutableStateOf(setOf<Long>()) }
+            val verifyAcked = remember(tid) { mutableStateOf(setOf<Long>()) }
+            var verifyDialogFor by remember(tid) { mutableStateOf<Long?>(null) }
             var collected by remember(tid) { mutableStateOf(false) }
-            var collectState by remember(tid) { mutableStateOf<MutationState?>(null) }
+            var collectUi by remember(tid) { mutableStateOf(WriteUi()) }
+            var collectVerifyAcked by remember(tid) { mutableStateOf(false) }
+            // A24-03：草稿按 所有者+帖+回复目标 隔离
+            val mutUserId by prefs.apiUserId.collectAsState()
+            val draftOwner = DraftStore.ownerOf(mutUserId)
 
             fun submitMutation(kind: MutationKind, params: Map<String, String>, onState: (MutationState) -> Unit) {
                 val t = mutToken
@@ -448,6 +457,67 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
             var floorsState by remember(tid) {
                 mutableStateOf<UiState<ThreadRepository.FloorsPage>>(UiState.InitialLoading)
             }
+            fun doApplaud(pid: Long) {
+                if (mutToken.isBlank()) { navigateTab(3); return }
+                val ui = applaudStates[pid]
+                // 在途禁重复；Verify 未核对→弹核对对话框（A24-02：禁直发重试）
+                if (ui?.phase == WriteUiPhase.Pending) return
+                if (ui?.phase == WriteUiPhase.Verify && pid !in verifyAcked.value) {
+                    verifyDialogFor = pid
+                    return
+                }
+                applaudedIds.value = applaudedIds.value + pid  // 乐观 +1（Pending 保留）
+                applaudStates[pid] = WriteUi(WriteUiPhase.Pending)
+                submitMutation(MutationKind.APPLAUD, mapOf("content_id" to "$pid")) { st ->
+                    when (st) {
+                        is MutationState.Confirmed ->
+                            applaudStates[pid] = WriteUi(WriteUiPhase.Done)
+                        is MutationState.Rejected -> {
+                            applaudStates[pid] = WriteUi(WriteUiPhase.Failed, st.reason)
+                            applaudedIds.value = applaudedIds.value - pid  // 回滚
+                        }
+                        is MutationState.OutcomeUnknown -> {
+                            // 结果未知：回滚乐观显示 + Verify（核对后经对话框才可重发）
+                            applaudStates[pid] = WriteUi(WriteUiPhase.Verify)
+                            applaudedIds.value = applaudedIds.value - pid
+                        }
+                        else -> {}
+                    }
+                }
+            }
+
+            fun doCollect() {
+                if (mutToken.isBlank()) { navigateTab(3); return }
+                if (collectUi.phase == WriteUiPhase.Pending) return
+                if (collectUi.phase == WriteUiPhase.Verify && !collectVerifyAcked) {
+                    collectVerifyAcked = true
+                }
+                val op = (opState as? UiState.Data<ThreadRepository.ThreadOP>)?.value
+                collectUi = WriteUi(WriteUiPhase.Pending)
+                submitMutation(
+                    MutationKind.COLLECT,
+                    mapOf(
+                        "title" to (op?.title ?: ""),
+                        "url" to "https://bbs.sdgun.com.cn/forum.php?mod=viewthread&tid=$tid",
+                        "content_type" to "thread",
+                        "id" to "$fid",
+                        "content_id" to "$tid",
+                    ),
+                ) { st ->
+                    when (st) {
+                        is MutationState.Confirmed -> {
+                            collectUi = WriteUi(WriteUiPhase.Done)
+                            collected = true
+                        }
+                        is MutationState.Rejected ->
+                            collectUi = WriteUi(WriteUiPhase.Failed, st.reason)
+                        is MutationState.OutcomeUnknown ->
+                            collectUi = WriteUi(WriteUiPhase.Verify)
+                        else -> {}
+                    }
+                }
+            }
+
             var descending by remember(tid) { mutableStateOf(false) }
             var posterOnly by remember(tid) { mutableStateOf(false) }
             var authorId by remember(tid) { mutableStateOf<Long?>(null) }
@@ -506,46 +576,26 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                 isLoggedIn = mutToken.isNotBlank(),
                 applaudStates = applaudStates,
                 applaudedIds = applaudedIds.value,
-                onApplaud = { pid ->
-                    if (mutToken.isBlank()) { navigateTab(3); return@ThreadPage }
-                    if (applaudStates[pid] is MutationState.Submitting) return@ThreadPage
-                    applaudedIds.value = applaudedIds.value + pid  // 乐观 +1
-                    submitMutation(MutationKind.APPLAUD, mapOf("content_id" to "$pid")) { st ->
-                        applaudStates[pid] = st
-                        if (st !is MutationState.Confirmed) {
-                            applaudedIds.value = applaudedIds.value - pid  // 失败/待确认回退
-                        }
-                    }
+                verifyDialogFor = verifyDialogFor,
+                onVerifyAck = { pid ->
+                    verifyDialogFor = null
+                    verifyAcked.value = verifyAcked.value + pid
+                    doApplaud(pid)  // 用户显式核对后允许重发（A24-02）
                 },
+                onVerifyDismiss = { verifyDialogFor = null },
+                onApplaud = { pid -> doApplaud(pid) },
                 isCollected = collected,
-                collectState = collectState,
-                onCollect = {
-                    if (mutToken.isBlank()) { navigateTab(3); return@ThreadPage }
-                    if (collectState is MutationState.Submitting) return@ThreadPage
-                    val op = (opState as? UiState.Data<ThreadRepository.ThreadOP>)?.value
-                    submitMutation(
-                        MutationKind.COLLECT,
-                        mapOf(
-                            "title" to (op?.title ?: ""),
-                            "url" to "https://bbs.sdgun.com.cn/forum.php?mod=viewthread&tid=$tid",
-                            "content_type" to "thread",
-                            "id" to "$fid",
-                            "content_id" to "$tid",
-                        ),
-                    ) { st ->
-                        collectState = st
-                        if (st is MutationState.Confirmed) collected = true
-                    }
-                },
+                collectState = collectUi,
+                onCollect = { doCollect() },
                 onReply = {
                     if (mutToken.isBlank()) { navigateTab(3) } else { replyOpen = true }
                 },
             )
             if (replyOpen) {
                 ReplySheet(
-                    initialDraft = DraftStore.load(mutContext, tid),
+                    initialDraft = DraftStore.load(mutContext, draftOwner, tid),
                     state = replyState,
-                    onDraftChange = { DraftStore.save(mutContext, tid, it) },
+                    onDraftChange = { DraftStore.save(mutContext, draftOwner, tid, it) },
                     onSend = { text ->
                         // auth=同盾参数（静态编目不可复刻，空值提交；真实验收=用户 MANUAL）
                         submitMutation(
@@ -562,7 +612,7 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                         ) { st ->
                             replyState = st
                             if (st is MutationState.Confirmed) {
-                                DraftStore.clear(mutContext, tid)
+                                DraftStore.clear(mutContext, draftOwner, tid)
                                 replyOpen = false
                                 loadFloors(true)
                             }

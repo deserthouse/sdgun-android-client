@@ -42,6 +42,8 @@ fun ReplySheet(
     onDismiss: () -> Unit,
 ) {
     var text by remember { mutableStateOf(initialDraft) }
+    // A24-02：OutcomeUnknown 后发送转两步确认（禁直发重试）
+    var verifyAck by remember { mutableStateOf(false) }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -80,14 +82,26 @@ fun ReplySheet(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                val unknownGate = state is MutationState.OutcomeUnknown && !verifyAck
                 Button(
                     onClick = {
-                        onDraftChange(text)
-                        onSend(text)
+                        if (unknownGate) {
+                            verifyAck = true // 第一击=确认已核对；第二击才真正重发
+                        } else {
+                            onDraftChange(text)
+                            onSend(text)
+                        }
                     },
                     enabled = text.isNotBlank() && state !is MutationState.Submitting,
                 ) {
-                    Text(if (state is MutationState.Submitting) "提交中…" else "发送")
+                    Text(
+                        when {
+                            state is MutationState.Submitting -> "提交中…"
+                            unknownGate -> "核对后重发"
+                            state is MutationState.OutcomeUnknown -> "仍要重发"
+                            else -> "发送"
+                        }
+                    )
                 }
             }
         }
