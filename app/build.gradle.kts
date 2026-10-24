@@ -11,7 +11,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val APP_VERSION_NAME = "1.10.6"
+val APP_VERSION_NAME = "1.11.0"
 
 android {
     namespace = "io.github.deserthouse.sdgun"
@@ -21,7 +21,7 @@ android {
         applicationId = "io.github.deserthouse.sdgun"
         minSdk = 31
         targetSdk = 37
-        versionCode = 38
+        versionCode = 39
         versionName = APP_VERSION_NAME
     }
 
