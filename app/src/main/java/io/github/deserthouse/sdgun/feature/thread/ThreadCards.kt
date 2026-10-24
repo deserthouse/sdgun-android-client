@@ -90,22 +90,26 @@ fun PostImage(url: String, onClick: () -> Unit) {
 
     LaunchedEffect(url) {
         val decoded = withContext(Dispatchers.IO) {
-            var code = 0
             try {
                 val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
                 conn.connectTimeout = 10000
                 conn.readTimeout = 15000
                 try {
-                    code = conn.responseCode
-                    conn.inputStream.use { android.graphics.BitmapFactory.decodeStream(it) }
+                    // A24-05：两段有界解码——先读字节+bounds，按采样率降解码内存
+                    val bytes = conn.inputStream.use { it.readBytes() }
+                    val bounds = android.graphics.BitmapFactory.Options().apply {
+                        inJustDecodeBounds = true
+                    }
+                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                    val sample = sampleSize(bounds.outWidth, bounds.outHeight, 2048)
+                    val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
                 } finally {
                     conn.disconnect()
                 }
             } catch (e: Exception) {
                 android.util.Log.w("PostImage", "fetch fail: $url -> ${e.javaClass.simpleName}: ${e.message}")
                 null
-            }?.also { bmp ->
-                if (bmp == null) android.util.Log.w("PostImage", "decode null: $url (http=$code)")
             }
         }
         bitmap = decoded
@@ -129,9 +133,8 @@ fun PostImage(url: String, onClick: () -> Unit) {
                 contentScale = ContentScale.FillWidth,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(
-                        (bmp.height.toFloat() / bmp.width.toFloat()).coerceIn(1f / 3f, 3f)
-                    )
+                    // A24-05 修正：Compose aspectRatio=宽/高（此前传高/宽=比例反转）
+                    .aspectRatio((bmp.width.toFloat() / bmp.height.toFloat()).coerceIn(1f / 3f, 3f))
                     .clickable(onClick = onClick),
             )
             failed -> Box(placeholder, contentAlignment = Alignment.Center) {
@@ -146,6 +149,15 @@ fun PostImage(url: String, onClick: () -> Unit) {
             }
         }
     }
+}
+
+/** A24-05：按最长边目标值的采样率计算（纯函数，JVM 可测）——始终 ≥1。 */
+fun sampleSize(width: Int, height: Int, maxEdge: Int): Int {
+    val longest = maxOf(width, height)
+    if (longest <= 0 || maxEdge <= 0) return 1
+    var sample = 1
+    while (longest / (sample * 2) >= maxEdge) sample *= 2
+    return sample
 }
 
 /** 楼层卡（A70-04 块化）：楼层号+作者+内容块（图文交错）+时间/赞（G4 点赞按钮化）。 */

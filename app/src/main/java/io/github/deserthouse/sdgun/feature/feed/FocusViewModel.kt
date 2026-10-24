@@ -39,19 +39,40 @@ class FocusViewModel(
         }
     }
 
+    /**
+     * 刷新语义（A24-04）：回第 1 页；成功后推进游标到 2；
+     * 失败时**保留旧列表**（Stale）——无旧数据才退 RetryableError。
+     */
     fun load(channel: FocusChannel) {
         if (loading.getValue(channel)!!.get()) return
         loading.getValue(channel)!!.set(true)
         scope.launch {
             val fetched = repo.loadChannel(channel.catId, 1)
+            val old = channelStates.getValue(channel).value
             channelStates.getValue(channel).value = when {
-                fetched == null -> UiState.RetryableError("资讯拉取失败，请检查网络后重试")
+                fetched == null -> if (old is UiState.Data<*>) {
+                    @Suppress("UNCHECKED_CAST")
+                    UiState.Stale(old.value as List<io.github.deserthouse.sdgun.data.repository.NewsItem>, "刷新失败，显示已缓存内容")
+                } else {
+                    UiState.RetryableError("资讯拉取失败，请检查网络后重试")
+                }
                 fetched.isEmpty() -> UiState.Empty("该频道暂无内容")
-                else -> UiState.Data(fetched)
+                else -> {
+                    nextPage.getValue(channel)!!.set(2)  // A24-04：推进游标（原缺陷=停在 1）
+                    UiState.Data(fetched)
+                }
             }
             loading.getValue(channel)!!.set(false)
         }
     }
+
+    /** 是否还有下一页可取（A24-04：UI 据此渲染加载更多入口） */
+    fun hasMore(channel: FocusChannel): Boolean =
+        nextPage.getValue(channel)!!.get() <= MAX_PAGES
+
+    /** 加载更多在途标志（UI 按钮态） */
+    fun loadingMore(channel: FocusChannel): Boolean =
+        loading.getValue(channel)!!.get()
 
     fun loadMore(channel: FocusChannel) {
         val st = channelStates.getValue(channel).value

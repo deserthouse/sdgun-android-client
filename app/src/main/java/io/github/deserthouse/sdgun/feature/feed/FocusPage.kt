@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -30,6 +31,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -57,8 +59,14 @@ fun FocusPage(
     onChannelSelect: (FocusChannel) -> Unit,
     onOpenLink: (String) -> Unit,
     onRetry: () -> Unit,
+    hasMore: Boolean,
+    loadingMore: Boolean,
+    onLoadMore: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // A24-04：每频道独立滚动位置（同一组合位不再跨频道共享状态）
+    val listStates = remember { mutableMapOf<FocusChannel, androidx.compose.foundation.lazy.LazyListState>() }
+    val listState = listStates.getOrPut(currentChannel) { androidx.compose.foundation.lazy.rememberLazyListState() }
     val ui by state.collectAsState()
     Scaffold(
         modifier = modifier,
@@ -107,16 +115,22 @@ fun FocusPage(
             is UiState.Data<*> -> FeedList(
                 items = @Suppress("UNCHECKED_CAST") (s as UiState.Data<List<NewsItem>>).value,
                 stale = null, onOpenLink = onOpenLink, padding = padding,
+                hasMore = hasMore, loadingMore = loadingMore, onLoadMore = onLoadMore,
+                listState = listState,
             )
 
             is UiState.Refreshing<*> -> FeedList(
                 items = @Suppress("UNCHECKED_CAST") (s as UiState.Refreshing<List<NewsItem>>).stale,
                 stale = null, onOpenLink = onOpenLink, padding = padding,
+                hasMore = hasMore, loadingMore = loadingMore, onLoadMore = onLoadMore,
+                listState = listState,
             )
 
             is UiState.Stale<*> -> FeedList(
                 items = @Suppress("UNCHECKED_CAST") (s as UiState.Stale<List<NewsItem>>).stale,
                 stale = s.error, onOpenLink = onOpenLink, padding = padding,
+                hasMore = hasMore, loadingMore = loadingMore, onLoadMore = onLoadMore,
+                listState = listState,
             )
         }
     }
@@ -128,9 +142,13 @@ private fun FeedList(
     stale: String?,
     onOpenLink: (String) -> Unit,
     padding: androidx.compose.foundation.layout.PaddingValues,
+    hasMore: Boolean,
+    loadingMore: Boolean,
+    onLoadMore: () -> Unit,
+    listState: androidx.compose.foundation.lazy.LazyListState,
 ) {
     LazyColumn(
-        state = rememberLazyListState(),
+        state = listState,
         modifier = Modifier.fillMaxSize().padding(padding),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -150,6 +168,16 @@ private fun FeedList(
         }
         items(items, key = { it.id }) { item ->
             FeedCard(item) { onOpenLink(item.link) }
+        }
+        if (hasMore) {
+            item(key = "load_more") {
+                TextButton(
+                    onClick = onLoadMore,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (loadingMore) "加载中…" else "加载更多")
+                }
+            }
         }
     }
 }

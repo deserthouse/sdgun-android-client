@@ -305,6 +305,9 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                     onChannelSelect = { ch -> channel = ch; vm.select(ch) },
                     onOpenLink = { url -> openLink(url) },
                     onRetry = { vm.load(channel) },
+                    hasMore = vm.hasMore(channel),
+                    loadingMore = vm.loadingMore(channel),
+                    onLoadMore = { vm.loadMore(channel) },
                     modifier = Modifier.fillMaxSize(),
                 )
             }

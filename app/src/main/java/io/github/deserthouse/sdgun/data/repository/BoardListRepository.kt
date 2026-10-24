@@ -83,9 +83,13 @@ object BoardListRepository {
                     authorId = r.optLong("user_id", 0L).takeIf { it > 0 },
                     avatarUrl = r.optString("user_head").takeIf { it.startsWith("http") },
                     coverUrl = firstPic(r),
-                    replyCount = r.optString("replies").takeIf { it.isNotBlank() && it != "null" },
+                    // A24-07 字段实测（forumView 真响应）：reply_count（字符串）而非 replies；
+                    // last_reply_time=unix 秒需格式化（原样泄漏时间戳上屏属缺陷）
+                    replyCount = r.optString("reply_count").takeIf { it.isNotBlank() && it != "null" },
                     viewCount = r.optString("click").takeIf { it.isNotBlank() && it != "null" },
-                    lastReplyTime = r.optString("last_reply_time").takeIf { it.isNotBlank() && it != "null" },
+                    lastReplyTime = r.optString("last_reply_time")
+                        .takeIf { it.isNotBlank() && it != "null" }
+                        ?.let { formatUnixTime(it) },
                     isTop = r.optInt("is_top", 0) > 0,
                     isDigest = r.optInt("digest", 0) > 0,
                     applaudCount = r.optString("applaud_count").takeIf { it.isNotBlank() && it != "null" },
@@ -95,6 +99,14 @@ object BoardListRepository {
             emptyList()
         }
     }
+
+    /** unix 秒 → "yyyy-M-d HH:mm"；非纯数字（已是格式化文本）原样保留（JVM 可测） */
+    fun formatUnixTime(raw: String): String =
+        runCatching {
+            val sec = raw.toLong()
+            val cal = java.util.Calendar.getInstance().apply { timeInMillis = sec * 1000 }
+            java.text.SimpleDateFormat("yyyy-M-d HH:mm", java.util.Locale.CHINA).format(cal.time)
+        }.getOrDefault(raw)
 
     private fun firstPic(r: JSONObject): String? {
         val arr = r.optJSONArray("pics") ?: return null
