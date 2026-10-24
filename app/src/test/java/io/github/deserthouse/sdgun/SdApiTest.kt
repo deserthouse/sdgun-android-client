@@ -73,4 +73,12 @@ class SdApiTest {
         assertEquals(a, b)
         assertNotEquals(a, c)
     }
+
+    @Test
+    fun `captcha url matches official piccode pattern with cache buster`() {
+        // F01：官方 API.User.piccode = https://mag1.sdgun.net/captcha?time=<millis>
+        val u = SdApi.captchaUrl(1790000000123L)
+        assertEquals("https://mag1.sdgun.net/captcha?time=1790000000123", u)
+        assertTrue("不同 epoch 必须产生不同 URL（刷新换图）", u != SdApi.captchaUrl(1790000000456L))
+    }
 }

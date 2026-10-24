@@ -68,6 +68,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -366,6 +367,32 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
             if (fid <= 0L) {
                 LaunchedEffect(Unit) { navController.popBackStack() }
             } else {
+                // ── U3-c 发帖（F14 前半）：表单+MutationRunner 五态（假服务三分支走查）──
+                val postToken by prefs.apiToken.collectAsState()
+                val postFake by prefs.mutationFake.collectAsState()
+                val postGateway: MutationGateway =
+                    if (BuildConfig.DEBUG && postFake != "off") FakeMutationGateway(postFake)
+                    else HttpMutationGateway()
+                val postScope = rememberCoroutineScope()
+                var postOpen by remember(fid) { mutableStateOf(false) }
+                var postState by remember(fid) {
+                    mutableStateOf<MutationState>(MutationState.Draft)
+                }
+                val uploadTasks = remember(fid) {
+                    mutableStateListOf<io.github.deserthouse.sdgun.feature.thread.UploadTaskItem>()
+                }
+                val pickImages = androidx.activity.compose.rememberLauncherForActivityResult(
+                    androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia(4),
+                ) { uris ->
+                    uris.forEachIndexed { i, u ->
+                        uploadTasks.add(
+                            io.github.deserthouse.sdgun.feature.thread.UploadTaskItem(
+                                id = (fid % 1000).toInt() * 100 + i,
+                                name = u.lastPathSegment ?: "image_$i",
+                                state = io.github.deserthouse.sdgun.feature.thread.UploadState.WAITING,
+                            ))
+                    }
+                }
                 BoardPage(
                     state = bvm.listState,
                     meta = bvm.meta ?: BoardListRepository.BoardMeta(
@@ -376,7 +403,68 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                     onOpenThread = { tid, _ -> navController.navigate("thread/$tid/$fid") },
                     onBack = { navController.popBackStack() },
                     onLoadMore = { bvm.loadMore(fid) },
+                    currentOrder = bvm.order,
+                    currentTypeId = bvm.typeId,
+                    onFilterChange = { o, t -> bvm.setFilter(fid, o, t) },
+                    onPostThread = {
+                        postState = MutationState.Draft
+                        postOpen = true
+                    },
                 )
+                if (postOpen) {
+                    io.github.deserthouse.sdgun.feature.thread.ThreadPostSheet(
+                        boardName = bvm.meta?.name ?: fallbackName,
+                        authed = postToken.isNotBlank(),
+                        submitting = postState is MutationState.Submitting,
+                        mutationState = postState,
+                        onDismiss = { postOpen = false },
+                        onSubmit = { title, content ->
+                            val form = io.github.deserthouse.sdgun.feature.thread.ThreadPostForm(
+                                title = title, content = content,
+                                fid = fid, circleId = fid,
+                            )
+                            val token = postToken
+                            if (token.isBlank()) {
+                                postState = MutationState.Rejected("请先登录")
+                            } else {
+                                postScope.launch {
+                                    val epoch = io.github.deserthouse.sdgun.core.session
+                                        .SessionManager.store.epoch.value
+                                    postState = io.github.deserthouse.sdgun.core.mutation
+                                        .MutationRunner.submit(
+                                            MutationRequest(
+                                                kind = MutationKind.THREAD_POST,
+                                                params = form.toParams(),
+                                                token = token,
+                                            ),
+                                            postGateway, epoch,
+                                            { captured -> io.github.deserthouse.sdgun.core.session
+                                                .SessionManager.store.epoch.isCurrent(captured) },
+                                        )
+                                }
+                            }
+                        },
+                        onPickImages = {
+                            pickImages.launch(
+                                androidx.activity.result.PickVisualMediaRequest(
+                                    androidx.activity.result.contract
+                                        .ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        },
+                        onRetryUpload = { t ->
+                            postScope.launch {
+                                io.github.deserthouse.sdgun.feature.thread.UploadQueueLogic.runTask(
+                                    t, io.github.deserthouse.sdgun.feature.thread
+                                        .HonestUnavailableUpload,
+                                ) { upd ->
+                                    val idx = uploadTasks.indexOfFirst { it.id == upd.id }
+                                    if (idx >= 0) uploadTasks[idx] = upd
+                                }
+                            }
+                        },
+                        onRemoveUpload = { t -> uploadTasks.removeAll { it.id == t.id } },
+                        uploadTasks = uploadTasks.toList(),
+                    )
+                }
             }
         }
         // ── 二级：帖子（G2-A05）——主楼+楼层流，返回钮回板块 ──
@@ -553,20 +641,35 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                         onBack = { navController.popBackStack() },
                         onLoggedIn = { /* token 翻转自动切到消息面 */ },
                         onOpenSettings = { navController.navigate("settings") },
+                        embedded = true,
                     )
                 } else {
+                    val profileFake by prefs.profileFake.collectAsState()
                     var groups by remember(token) {
                         mutableStateOf<List<ProfileRepository.MessageGroup>>(emptyList())
                     }
                     var loading by remember(token) { mutableStateOf(true) }
-                    LaunchedEffect(token) {
+                    LaunchedEffect(token, profileFake) {
                         loading = true
-                        groups = ProfileRepository.fetchMessageGroups(token)
+                        // U3-b：合成模式走夹具（零触网），off=真端点
+                        groups = if (profileFake == "data") {
+                            listOf(
+                                ProfileRepository.MessageGroup("g1", "（合成）私信：弓友A", 2),
+                                ProfileRepository.MessageGroup("g2", "（合成）私信：皮筋交流群", 5),
+                            )
+                        } else if (profileFake == "empty") emptyList()
+                        else if (profileFake == "error") emptyList()
+                        else ProfileRepository.fetchMessageGroups(token)
                         loading = false
                     }
                     MessagesPage(
                         groups = groups,
                         isLoading = loading,
+                        onOpenGroup = { g ->
+                            navController.navigate(
+                                "messages/conversation/${g.id}?name=${Uri.encode(g.name)}")
+                        },
+                        onOpenNotifications = { navController.navigate("notifications") },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -583,18 +686,30 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                         onBack = { navController.popBackStack() },
                         onLoggedIn = { /* token 翻转自动切到个人面 */ },
                         onOpenSettings = { navController.navigate("settings") },
+                        embedded = true,
                     )
                 } else {
+                    val profileFake by prefs.profileFake.collectAsState()
                     var pState by remember(token) {
                         mutableStateOf<UiState<ProfileRepository.UserProfile>>(UiState.InitialLoading)
                     }
-                    LaunchedEffect(token, userId) {
+                    LaunchedEffect(token, userId, profileFake) {
                         // A70-05：POST {id:userId} 官方契约；旧残留会话无 id → null=失败引导重登
-                        val p = ProfileRepository.fetchMyInfo(token, userId)
-                        pState = if (p == null) {
-                            UiState.RetryableError("个人资料拉取失败，请退出后重新登录")
+                        // U3-b：合成模式给夹具资料（零触网走查）
+                        pState = if (profileFake == "data") {
+                            UiState.Data(ProfileRepository.UserProfile(
+                                userId = 99999L, name = "sdgfake（合成）", head = null,
+                                groupName = "合成用户组", groupLevel = null, score = "0",
+                                sex = null, sign = "合成模式：设置→开发者→合成个人数据",
+                                hasPhone = false, isVip = 0,
+                            ))
                         } else {
-                            UiState.Data(p)
+                            val p = ProfileRepository.fetchMyInfo(token, userId)
+                            if (p == null) {
+                                UiState.RetryableError("个人资料拉取失败，请退出后重新登录")
+                            } else {
+                                UiState.Data(p)
+                            }
                         }
                     }
                     ProfilePage(
@@ -604,9 +719,173 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                         onLogout = {
                             io.github.deserthouse.sdgun.core.session.SessionManager.store.onLogout()
                         },
+                        onOpenPeople = { kind ->
+                            navController.navigate("profile/people/${kind.name}")
+                        },
+                        onOpenCollect = { navController.navigate("profile/collect") },
+                        onOpenServices = { navController.navigate("services") },
                     )
                 }
             }
+        }
+        // ── U3-b（F18/19）：访客/历史/关注/收藏（合成先行，off=真实读链）──
+        composable("profile/people/{kind}") { entry ->
+            val kindName = entry.arguments?.getString("kind") ?: ""
+            val kind = io.github.deserthouse.sdgun.feature.profile.PeopleKind.entries
+                .firstOrNull { it.name == kindName }
+            if (kind == null) {
+                LaunchedEffect(Unit) { navController.popBackStack() }
+            } else {
+                val token by prefs.apiToken.collectAsState()
+                val profileFake by prefs.profileFake.collectAsState()
+                // kind 决定真实读链（loader 工厂按 kind 分流三端点）
+                val loader = remember(kind, token, profileFake) {
+                    io.github.deserthouse.sdgun.feature.profile.peopleLoader(
+                        kind, token.ifBlank { null }, profileFake,
+                    ) { t ->
+                        when (kind) {
+                            io.github.deserthouse.sdgun.feature.profile.PeopleKind.VISITORS ->
+                                ProfileRepository.fetchVisitors(t)
+                            io.github.deserthouse.sdgun.feature.profile.PeopleKind.HISTORY ->
+                                ProfileRepository.fetchViewUsers(t)
+                            io.github.deserthouse.sdgun.feature.profile.PeopleKind.FOLLOWS ->
+                                ProfileRepository.fetchFollows(t)
+                        }
+                    }
+                }
+                var peopleState by remember(kind, token, profileFake) {
+                    mutableStateOf<UiState<io.github.deserthouse.sdgun.feature.profile.PeoplePageData>>(
+                        UiState.InitialLoading)
+                }
+                LaunchedEffect(kind, token, profileFake) {
+                    peopleState = UiState.InitialLoading
+                    peopleState = loader()
+                }
+                io.github.deserthouse.sdgun.feature.profile.PeopleScaffold(
+                    title = kind.title,
+                    state = peopleState,
+                    onBack = { navController.popBackStack() },
+                    onRetry = { peopleState = UiState.InitialLoading },
+                    listContent = {
+                        io.github.deserthouse.sdgun.feature.profile.PeopleListBody(it)
+                    },
+                )
+            }
+        }
+        composable("profile/collect") {
+            val token by prefs.apiToken.collectAsState()
+            val profileFake by prefs.profileFake.collectAsState()
+            var collectState by remember(token, profileFake) {
+                mutableStateOf<UiState<io.github.deserthouse.sdgun.feature.profile.CollectPageData>>(
+                    UiState.InitialLoading)
+            }
+            LaunchedEffect(token, profileFake) {
+                collectState = UiState.InitialLoading
+                collectState = io.github.deserthouse.sdgun.feature.profile.collectLoader(
+                    token.ifBlank { null }, profileFake,
+                )()
+            }
+            io.github.deserthouse.sdgun.feature.profile.PeopleScaffold(
+                title = "收藏",
+                state = collectState,
+                onBack = { navController.popBackStack() },
+                onRetry = { collectState = UiState.InitialLoading },
+                listContent = {
+                    io.github.deserthouse.sdgun.feature.profile.CollectListBody(it) { tid ->
+                        navController.navigate("thread/$tid/0")
+                    }
+                },
+            )
+        }
+        // ── U3-b（F20）：会话详情（合成先行——详情端点参数测绘标注待用）──
+        composable("messages/conversation/{id}?name={name}") { entry ->
+            val name = entry.arguments?.getString("name") ?: "会话"
+            val profileFake by prefs.profileFake.collectAsState()
+            var convState by remember(name, profileFake) {
+                mutableStateOf<UiState<io.github.deserthouse.sdgun.feature.messages.ConversationData>>(
+                    UiState.InitialLoading)
+            }
+            LaunchedEffect(name, profileFake) {
+                convState = if (profileFake == "data") {
+                    UiState.Data(io.github.deserthouse.sdgun.feature.messages
+                        .syntheticConversation(name))
+                } else if (profileFake == "empty") {
+                    UiState.Empty("暂无消息")
+                } else if (profileFake == "error") {
+                    UiState.RetryableError("（合成）加载失败，可重试")
+                } else {
+                    // 真实路径：详情端点待测绘——诚实未接入，不冒充空/失败
+                    UiState.RetryableError("会话详情读取待接口接入")
+                }
+            }
+            io.github.deserthouse.sdgun.feature.messages.ConversationDetailPage(
+                groupName = name,
+                data = (convState as? UiState.Data<*>)?.value
+                    as? io.github.deserthouse.sdgun.feature.messages.ConversationData,
+                isLoading = convState is UiState.InitialLoading,
+                onBack = { navController.popBackStack() },
+            )
+        }
+        // ── U3-b（F21）：通知中心（合成先行+权限拒绝态）──
+        composable("notifications") {
+            val token by prefs.apiToken.collectAsState()
+            val profileFake by prefs.profileFake.collectAsState()
+            var notifyState by remember(token, profileFake) {
+                mutableStateOf<UiState<io.github.deserthouse.sdgun.feature.messages.NotifyData>>(
+                    UiState.InitialLoading)
+            }
+            LaunchedEffect(token, profileFake) {
+                notifyState = if (profileFake == "data") {
+                    UiState.Data(io.github.deserthouse.sdgun.feature.messages.syntheticNotify())
+                } else if (profileFake == "empty") {
+                    UiState.Empty("暂无通知")
+                } else if (profileFake == "error") {
+                    UiState.RetryableError("（合成）加载失败，可重试")
+                } else if (token.isBlank()) {
+                    UiState.AuthRequired
+                } else {
+                    // userNotifyIndex 解析器待凭据实测后补——诚实未接入
+                    UiState.RetryableError("通知读取待接口接入")
+                }
+            }
+            io.github.deserthouse.sdgun.feature.messages.NotificationPage(
+                state = notifyState,
+                onBack = { navController.popBackStack() },
+                onRetry = { notifyState = UiState.InitialLoading },
+            )
+        }
+        // ── U3-c（F23~27）：H5 服务（配置驱动）+ 容器 ──
+        composable("services") {
+            val ctx = LocalContext.current
+            io.github.deserthouse.sdgun.feature.h5.ServicesPage(
+                onBack = { navController.popBackStack() },
+                onOpenEntry = { e ->
+                    when (e.mode) {
+                        // AR-01 域外分流：EXTERNAL 交系统浏览器，不进带桥 WebView
+                        io.github.deserthouse.sdgun.feature.h5.H5Mode.EXTERNAL ->
+                            ctx.startActivity(android.content.Intent(
+                                android.content.Intent.ACTION_VIEW, android.net.Uri.parse(e.url)))
+                        else -> navController.navigate(
+                            "h5/${Uri.encode(e.title)}?url=${Uri.encode(e.url)}")
+                    }
+                },
+            )
+        }
+        composable("h5/{title}?url={url}") { entry ->
+            val title = entry.arguments?.getString("title") ?: "H5"
+            val url = entry.arguments?.getString("url") ?: return@composable
+            val ctx = LocalContext.current
+            io.github.deserthouse.sdgun.feature.h5.H5Container(
+                title = title,
+                url = url,
+                state = state,
+                webView = webView,
+                onBack = { navController.popBackStack() },
+                onOpenExternal = { u ->
+                    ctx.startActivity(android.content.Intent(
+                        android.content.Intent.ACTION_VIEW, android.net.Uri.parse(u)))
+                },
+            )
         }
         composable("news") {
             val context = LocalContext.current

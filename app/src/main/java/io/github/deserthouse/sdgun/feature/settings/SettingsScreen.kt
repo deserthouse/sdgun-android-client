@@ -172,6 +172,32 @@ fun SettingsScreen(
                             Text(mutationFake)
                         }
                     }
+
+                    // U3-b 合成个人数据（零触网）：访客/历史/关注/收藏/消息/通知页
+                    // 无凭据装机的三态走查用；off=真端点（真实读链需登录）
+                    val profileFakeModes = listOf("off", "data", "empty", "error")
+                    val profileFake by prefs.profileFake.collectAsStateCompat()
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("合成个人数据", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "访客/历史/关注/收藏/消息/通知走合成夹具（零触网）；off=真端点",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        TextButton(onClick = {
+                            val next = profileFakeModes[
+                                ((profileFakeModes.indexOf(profileFake) + 1) % profileFakeModes.size)]
+                            prefs.setProfileFake(next)
+                        }) {
+                            Text(profileFake)
+                        }
+                    }
                 }
             }
 

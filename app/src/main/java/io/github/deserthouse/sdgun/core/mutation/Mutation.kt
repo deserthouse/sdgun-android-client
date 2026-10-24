@@ -19,6 +19,13 @@ enum class MutationKind(val url: String) {
 
     /** 收藏：POST 表单 title/url/content_type/id/content_id（参数序=静态编目；真实字段验收=用户 MANUAL） */
     COLLECT("https://mag1.sdgun.net/mag/user/v1/User/userCollectAdd"),
+
+    /**
+     * 发帖：POST 表单 title/content/fid/circle_id（jadx ThreadPostActivity.toPost 同构）；
+     * 编辑态另带 tid+modthreadkey（→editContent 端点，本版不做编辑 UI——modthreadkey 取值链未实测）；
+     * auth=同盾参数未复刻（B2 先例：不假称可用），真实提交验收=用户 MANUAL。
+     */
+    THREAD_POST("https://mag1.sdgun.net/mag/circle/v1/Forum/threadAdd"),
 }
 
 /**

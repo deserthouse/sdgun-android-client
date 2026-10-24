@@ -12,12 +12,13 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * 板块页状态所有者（A24-06）：与 ThreadViewModel 同构——代际+取消+互斥分页+空尾页原子收尾。
+ * R5（U3-a）：order/typeId 筛选状态入 VM，筛选变化=新代际重拉（旧包整弃+游标复位）。
  * fetcher/meta 注入点供 JVM 反例。
  */
 class BoardViewModel(
     private val scope: CoroutineScope,
-    private val fetchPage: suspend (fid: Long, page: Int) -> BoardListRepository.PageResult? =
-        { fid, page -> BoardListRepository.fetchPage(fid, page) },
+    private val fetchPage: suspend (fid: Long, page: Int, order: String, typeId: String) -> BoardListRepository.PageResult? =
+        { fid, page, order, typeId -> BoardListRepository.fetchPage(fid, page, order, typeId) },
     private val fetchMeta: suspend (fid: Long) -> BoardListRepository.BoardMeta? =
         { fid -> BoardListRepository.fetchBoardMeta(fid) },
 ) {
@@ -25,6 +26,10 @@ class BoardViewModel(
     var listState by androidx.compose.runtime.mutableStateOf<UiState<BoardListRepository.PageResult>>(UiState.InitialLoading)
         private set
     var meta by androidx.compose.runtime.mutableStateOf<BoardListRepository.BoardMeta?>(null)
+        private set
+    var order by androidx.compose.runtime.mutableStateOf("")
+        private set
+    var typeId by androidx.compose.runtime.mutableStateOf("")
         private set
 
     private val rows = androidx.compose.runtime.mutableStateListOf<BoardListRepository.ThreadRow>()
@@ -35,14 +40,15 @@ class BoardViewModel(
     private var job: Job? = null
 
     fun start(fid: Long) {
+        order = ""; typeId = ""
+        meta = null
         val g = gen.incrementAndGet()
         job?.cancel()
         paging.set(false)
         listState = UiState.InitialLoading
         rows.clear(); page = 1; totalPages = 1
-        meta = null
         job = scope.launch {
-            val pr = fetchPage(fid, 1)
+            val pr = fetchPage(fid, 1, order, typeId)
             if (gen.get() != g) return@launch
             applyFirst(pr)
             if (pr != null) {
@@ -52,12 +58,28 @@ class BoardViewModel(
         }
     }
 
+    /** R5：筛选变化=新代际重拉；同值 no-op 防重复请求；板块元数据与筛选无关，不清除。 */
+    fun setFilter(fid: Long, newOrder: String, newTypeId: String) {
+        if (newOrder == order && newTypeId == typeId) return
+        order = newOrder; typeId = newTypeId
+        val g = gen.incrementAndGet()
+        job?.cancel()
+        paging.set(false)
+        listState = UiState.InitialLoading
+        rows.clear(); page = 1; totalPages = 1
+        job = scope.launch {
+            val pr = fetchPage(fid, 1, order, typeId)
+            if (gen.get() != g) return@launch
+            applyFirst(pr)
+        }
+    }
+
     fun loadMore(fid: Long) {
         if (paging.get() || listState !is UiState.Data<*>) return  // A24-06：首屏在途禁翻页（反例：空尾页竞态）
         val g = gen.get()
         paging.set(true)
         job = scope.launch {
-            val pr = fetchPage(fid, page + 1)
+            val pr = fetchPage(fid, page + 1, order, typeId)
             paging.set(false)
             if (gen.get() != g) return@launch
             when {

@@ -24,6 +24,10 @@ class AppPrefs(context: Context) {
     private val _mutationFake = MutableStateFlow(sp.getString(KEY_MUTATION_FAKE, "off") ?: "off")
     val mutationFake: StateFlow<String> = _mutationFake
 
+    /** U3-b 合成个人数据（debug 装机走查用）：off/data/empty/error——off=真端点（需凭据） */
+    private val _profileFake = MutableStateFlow(sp.getString(KEY_PROFILE_FAKE, "off") ?: "off")
+    val profileFake: StateFlow<String> = _profileFake
+
     private val _textZoom = MutableStateFlow(sp.getInt(KEY_TEXT_ZOOM, 100))
     val textZoom: StateFlow<Int> = _textZoom
 
@@ -45,6 +49,11 @@ class AppPrefs(context: Context) {
     fun setMutationFake(v: String) {
         sp.edit().putString(KEY_MUTATION_FAKE, v).apply()
         _mutationFake.value = v
+    }
+
+    fun setProfileFake(v: String) {
+        sp.edit().putString(KEY_PROFILE_FAKE, v).apply()
+        _profileFake.value = v
     }
 
     fun setTextZoom(v: Int) {
@@ -91,6 +100,7 @@ class AppPrefs(context: Context) {
 
         const val KEY_DEBUG_BRIDGE = "debug_bridge"
         const val KEY_MUTATION_FAKE = "mutation_fake"
+        const val KEY_PROFILE_FAKE = "profile_fake"
 
         const val KEY_API_TOKEN = "api_token"
         const val KEY_API_ACCOUNT = "api_account"

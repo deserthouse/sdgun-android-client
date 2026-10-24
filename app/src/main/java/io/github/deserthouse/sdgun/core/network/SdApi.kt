@@ -34,6 +34,10 @@ object SdApi {
         + "UrxvK+JOEWJrzXCbIOZg0QLfai+tFkmTi5jK91mQpX2di6xhiMk18gwnBmmNQQrSlEr1YgwIDAQAB")
 
     const val LOGIN_URL = "https://mag1.sdgun.net/mag/user/v1/user/login"
+
+    /** F01 官方验证码图源（jadx API.User.piccode 同源）：时间戳防缓存，GET 无需会话 */
+    const val CAPTCHA_BASE = "https://mag1.sdgun.net/captcha?time="
+    fun captchaUrl(epoch: Long): String = "$CAPTCHA_BASE$epoch"
     private const val WEB_UA = ("Mozilla/5.0 (Linux; Android 16; Pixel 8) AppleWebKit/537.36 "
         + "(KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36")
 

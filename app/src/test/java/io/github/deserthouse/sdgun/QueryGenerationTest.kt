@@ -99,7 +99,7 @@ class QueryGenerationTest {
         var call = 0
         val vm = BoardViewModel(
             this,
-            fetchPage = { _, page ->
+            fetchPage = { _, page, _, _ ->
                 call++
                 if (page > 1) return@BoardViewModel null
                 if (call == 1) { delay(200); rowPage(1, listOf(1)) }   // 旧 fid 慢
