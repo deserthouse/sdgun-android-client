@@ -113,13 +113,30 @@ object NewsRepository {
         return NewsItem(
             id = id,
             title = o.optString("title").trim(),
-            summary = o.optString("des").trim(),
+            // A24-07 摘要清洗：剥"本帖最后由…编辑"痕迹（装机走查实测上屏）
+            summary = cleanSummary(o.optString("des")),
             coverUrl = firstCover(o),
             source = o.optString("forum_name").trim(),
             timeText = o.optString("publish_time_str").takeIf { it.isNotBlank() },
             comments = if (o.has("comment_count")) o.optInt("comment_count") else null,
             link = link,
         )
+    }
+
+    /**
+     * 摘要清洗（A24-07）：剥编辑痕迹前缀"本帖最后由 X 于 …[编辑]"与 @提及行首痕迹。
+     * 纯函数 JVM 可测；不改动 des 原文语义，只去版式噪声。
+     */
+    internal fun cleanSummary(raw: String): String {
+        var s = raw.trim()
+        // 迭代剥：组合前缀（[分类] 本帖最后由…编辑 正文）需多轮直到稳定
+        while (true) {
+            val prev = s
+            s = s.replace(Regex("""^本帖最后由[^于]{1,24}于[^编]{1,40}编辑\s*"""), "")
+            s = s.replace(Regex("""^\[[^\]]{1,20}\]\s*"""), "")
+            if (s == prev) break
+        }
+        return s.trim()
     }
 
     private fun firstCover(o: JSONObject): String? {

@@ -28,6 +28,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.deserthouse.sdgun.core.model.UiState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import io.github.deserthouse.sdgun.data.repository.BoardRepository
 
 /**
@@ -109,22 +118,8 @@ private fun BoardRow(board: BoardRepository.Board, onClick: () -> Unit) {
             Modifier.padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            androidx.compose.foundation.layout.Box(
-                Modifier.size(48.dp).background(
-                    MaterialTheme.colorScheme.surfaceVariant,
-                    RoundedCornerShape(10.dp),
-                ),
-            ) {
-                board.iconUrl?.let { url ->
-                    androidx.compose.foundation.layout.Box(
-                        Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text("板块", style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
+            // A24-07 板块行真实化：icon_url 有则加载真图，否则保留语义占位
+            BoardIcon(url = board.iconUrl)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(board.name, style = MaterialTheme.typography.titleSmall,
@@ -140,6 +135,57 @@ private fun BoardRow(board: BoardRepository.Board, onClick: () -> Unit) {
                 Text("今日 $it", style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+        }
+    }
+}
+
+/** 板块图标：icon_url 小图有界解码；无图/失败=语义占位（A24-07）。 */
+@Composable
+fun BoardIcon(url: String?) {
+    var bitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var failed by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(url) {
+        if (url == null) {
+            failed = true
+            return@LaunchedEffect
+        }
+        bitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 8000
+                conn.readTimeout = 12000
+                try {
+                    val bytes = conn.inputStream.use { it.readBytes() }
+                    val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = 2 }
+                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                } finally {
+                    conn.disconnect()
+                }
+            } catch (e: Exception) {
+                null
+            }
+        }
+        if (bitmap == null) failed = true
+    }
+    val shape = RoundedCornerShape(10.dp)
+    androidx.compose.foundation.layout.Box(
+        Modifier.size(48.dp).background(
+            MaterialTheme.colorScheme.surfaceVariant,
+            shape,
+        ),
+        contentAlignment = Alignment.Center,
+    ) {
+        val bmp = bitmap
+        when {
+            bmp != null -> androidx.compose.foundation.Image(
+                bitmap = bmp.asImageBitmap(),
+                contentDescription = "板块图标",
+                modifier = Modifier.size(44.dp).clip(shape),
+            )
+            failed -> Text("板块", style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            else -> androidx.compose.material3.CircularProgressIndicator(
+                Modifier.size(20.dp), strokeWidth = 2.dp)
         }
     }
 }
