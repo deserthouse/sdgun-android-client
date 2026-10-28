@@ -31,6 +31,10 @@ class AppPrefs(context: Context) {
     private val _textZoom = MutableStateFlow(sp.getInt(KEY_TEXT_ZOOM, 100))
     val textZoom: StateFlow<Int> = _textZoom
 
+    /** U4 补真实现（A-R3）：原生阅读字号（Compose 正文独立缩放，与 WebView textZoom 分列） */
+    private val _nativeFontScale = MutableStateFlow(sp.getInt(KEY_NATIVE_FONT_SCALE, 100))
+    val nativeFontScale: StateFlow<Int> = _nativeFontScale
+
     fun setDynamicColor(v: Boolean) {
         sp.edit().putBoolean(KEY_DYNAMIC_COLOR, v).apply()
         _dynamicColor.value = v
@@ -59,6 +63,11 @@ class AppPrefs(context: Context) {
     fun setTextZoom(v: Int) {
         sp.edit().putInt(KEY_TEXT_ZOOM, v).apply()
         _textZoom.value = v
+    }
+
+    fun setNativeFontScale(v: Int) {
+        sp.edit().putInt(KEY_NATIVE_FONT_SCALE, v).apply()
+        _nativeFontScale.value = v
     }
 
     // ---- API 会话（R-A1）：token/账号/utdid，独立于 WebView Cookie 会话 ----
@@ -97,6 +106,7 @@ class AppPrefs(context: Context) {
         const val KEY_DYNAMIC_COLOR = "dynamic_color"
         const val KEY_WEB_THEME = "web_theme"
         const val KEY_TEXT_ZOOM = "text_zoom"
+        const val KEY_NATIVE_FONT_SCALE = "native_font_scale"
 
         const val KEY_DEBUG_BRIDGE = "debug_bridge"
         const val KEY_MUTATION_FAKE = "mutation_fake"

@@ -119,3 +119,22 @@ fun SDGunTheme(
         content = content,
     )
 }
+
+// ── U4 补真实现（A-R3）：原生阅读字号 ──────────────────────────────
+// 正文级 typography 缩放（100~140%），与 WebView textZoom 分列两设置项；
+// v1.11.0 曾纯声明发布本功能，勘误后于 v2.0.0 兑现（WidthTierTest 同批回归锁）。
+
+@Composable
+fun ReadingTheme(fontScalePct: Int, content: @Composable () -> Unit) {
+    val f = (fontScalePct.coerceIn(100, 140)) / 100f
+    val t = MaterialTheme.typography
+    MaterialTheme(
+        typography = t.copy(
+            bodyLarge = t.bodyLarge.copy(fontSize = t.bodyLarge.fontSize * f),
+            bodyMedium = t.bodyMedium.copy(fontSize = t.bodyMedium.fontSize * f),
+            bodySmall = t.bodySmall.copy(fontSize = t.bodySmall.fontSize * f),
+            titleMedium = t.titleMedium.copy(fontSize = t.titleMedium.fontSize * f),
+            titleSmall = t.titleSmall.copy(fontSize = t.titleSmall.fontSize * f),
+        ),
+    ) { content() }
+}

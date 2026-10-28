@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
@@ -155,7 +157,16 @@ fun ThreadPage(
                     parseContentBlocks(op.pid, op.contentHtml)
                 }
                 val opGroup = remember(opBlocks) { imageUrls(opBlocks) }
-                LazyColumn(Modifier.fillMaxSize().padding(padding)) {
+                // U4 补真实现（A-R3）：宽屏内容宽度约束（U2 声明兑现）——720dp 居中防单列拉伸
+                Row(
+                    Modifier.fillMaxSize().padding(padding),
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                LazyColumn(
+                    Modifier
+                        .fillMaxSize()
+                        .widthIn(max = 720.dp),
+                ) {
                     item(key = "op_head") {
                         OpHeader(
                             op,
@@ -178,6 +189,7 @@ fun ThreadPage(
                     }
                     floorsItems(floorsState, applaudStates, applaudedIds, onApplaud, onRetryFloors, onLoadMore, openViewer)
                     moreItem(floorsState, onLoadMore)
+                }
                 }
             }
 

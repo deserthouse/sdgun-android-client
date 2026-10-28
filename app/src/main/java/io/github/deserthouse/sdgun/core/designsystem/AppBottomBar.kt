@@ -55,3 +55,40 @@ fun AppBottomBar(
         }
     }
 }
+
+// ── U4 补真实现（A-R3 主片）：宽屏三档 ─────────────────────────────
+// v1.11.0 曾以纯声明发布本功能（提交仅版本号、零代码——2026-10-28 U4 实测揭穿，
+// 勘误随 v2.0.0 披露）。以下为真实实现，档位边界锁定于 WidthTierTest。
+
+/** 宽度档位（A-R3 任务卡边界：<600 底栏 / 600~839 rail / ≥840 rail+内容约束） */
+enum class NavTier { COMPACT, MEDIUM, EXPANDED }
+
+fun widthTier(screenWidthDp: Int): NavTier = when {
+    screenWidthDp >= 840 -> NavTier.EXPANDED
+    screenWidthDp >= 600 -> NavTier.MEDIUM
+    else -> NavTier.COMPACT
+}
+
+/** 宽档侧栏（替代底栏）：与 AppBottomBar 同源 TABS/选中语义 */
+@Composable
+fun AppSideRail(
+    activeIdx: Int,
+    onTab: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.material3.NavigationRail(modifier = modifier) {
+        TABS.forEachIndexed { i, tab ->
+            androidx.compose.material3.NavigationRailItem(
+                selected = activeIdx == i,
+                onClick = { onTab(i) },
+                icon = {
+                    Icon(
+                        if (activeIdx == i) tab.selectedIcon else tab.unselectedIcon,
+                        contentDescription = tab.label,
+                    )
+                },
+                label = { Text(tab.label) },
+            )
+        }
+    }
+}

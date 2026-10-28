@@ -122,6 +122,37 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+
+                    // U4 补真实现（A-R3）：原生阅读字号（v1.11.0 纯声明勘误后兑现）
+                    val nativeScale by prefs.nativeFontScale.collectAsStateCompat()
+                    var nativeLocal by remember(nativeScale) { mutableFloatStateOf(nativeScale.toFloat()) }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("原生阅读字号", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "${nativeLocal.toInt()}%",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    Slider(
+                        value = nativeLocal,
+                        onValueChange = { nativeLocal = it },
+                        onValueChangeFinished = {
+                            val snapped = ((nativeLocal / 10f).let { it.toInt() + if (it % 1 >= 0.5f) 1 else 0 }) * 10
+                            nativeLocal = snapped.toFloat()
+                            prefs.setNativeFontScale(snapped)
+                        },
+                        valueRange = 100f..140f,
+                    )
+                    Text(
+                        "作用于聚焦/帖子等原生页正文；与网页文字大小独立",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
 

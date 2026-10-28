@@ -75,6 +75,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
@@ -314,6 +315,8 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
             var channel by remember { mutableStateOf(FocusChannel.LATEST) }
             LaunchedEffect(Unit) { vm.select(channel) }
             TabShell(activeIdx = 0, onTab = { navigateTab(it) }, onSearch = { openCompatSearch() }) {
+                val nfs by prefs.nativeFontScale.collectAsState()
+                io.github.deserthouse.sdgun.core.designsystem.ReadingTheme(nfs) {
                 FocusPage(
                     state = vm.state(channel),
                     channels = FocusChannel.entries.toList(),
@@ -326,6 +329,7 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                     onLoadMore = { vm.loadMore(channel) },
                     modifier = Modifier.fillMaxSize(),
                 )
+                }
             }
         }
         // ── 一级 tab 1：社区（G2-A03 板块树）──
@@ -572,6 +576,8 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
 
             LaunchedEffect(tid) { if (tid > 0L) tvm.start(tid, fid) }
 
+            val nfs2 by prefs.nativeFontScale.collectAsState()
+            io.github.deserthouse.sdgun.core.designsystem.ReadingTheme(nfs2) {
             ThreadPage(
                 opState = opState,
                 floorsState = floorsState,
@@ -629,6 +635,7 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                     },
                     onDismiss = { replyOpen = false },
                 )
+            }
             }
         }
         // ── 一级 tab 2：消息（G3）——游客态 tab 内嵌登录面（门禁不跳路由，选中态不漂移）──
@@ -963,23 +970,50 @@ private fun TabShell(
     onSearch: () -> Unit = {},
     content: @Composable () -> Unit,
 ) {
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.surface,
-        topBar = {
-            // R4：原生导航搜索入口——落兼容壳搜索页（mag1 无帖子搜索 API，搜索永久岛）
-            TopAppBar(
-                title = { Text("SDGun") },
-                actions = {
-                    IconButton(onClick = onSearch) {
-                        Icon(Icons.Filled.Search, contentDescription = "搜索")
-                    }
+    // U4 补真实现（A-R3）：宽屏三档——≥600dp 底栏换 NavigationRail（U2 声明兑现）
+    val tier = io.github.deserthouse.sdgun.core.designsystem.widthTier(
+        androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp)
+    if (tier == io.github.deserthouse.sdgun.core.designsystem.NavTier.COMPACT) {
+        Scaffold(
+            containerColor = MaterialTheme.colorScheme.surface,
+            topBar = {
+                // R4：原生导航搜索入口——落兼容壳搜索页（mag1 无帖子搜索 API，搜索永久岛）
+                TopAppBar(
+                    title = { Text("SDGun") },
+                    actions = {
+                        IconButton(onClick = onSearch) {
+                            Icon(Icons.Filled.Search, contentDescription = "搜索")
+                        }
+                    },
+                )
+            },
+            bottomBar = { AppBottomBar(activeIdx = activeIdx, onTab = onTab) },
+        ) { padding ->
+            // 只消费 bottom：页内自持 Scaffold 的 TopAppBar 已处理状态栏 inset，
+            // 顶部再套一层会造成双倍留白（A70 走查实测）
+            Box(Modifier.fillMaxSize().padding(bottom = padding.calculateBottomPadding())) { content() }
+        }
+    } else {
+        Row(Modifier.fillMaxSize()) {
+            io.github.deserthouse.sdgun.core.designsystem.AppSideRail(
+                activeIdx = activeIdx, onTab = onTab)
+            Scaffold(
+                modifier = Modifier.weight(1f),
+                containerColor = MaterialTheme.colorScheme.surface,
+                topBar = {
+                    TopAppBar(
+                        title = { Text("SDGun") },
+                        actions = {
+                            IconButton(onClick = onSearch) {
+                                Icon(Icons.Filled.Search, contentDescription = "搜索")
+                            }
+                        },
+                    )
                 },
-            )
-        },
-        bottomBar = { AppBottomBar(activeIdx = activeIdx, onTab = onTab) },
-    ) { padding ->
-        // 只消费 bottom：页内自持 Scaffold 的 TopAppBar 已处理状态栏 inset，
-        // 顶部再套一层会造成双倍留白（A70 走查实测）
-        Box(Modifier.fillMaxSize().padding(bottom = padding.calculateBottomPadding())) { content() }
+            ) { padding ->
+                // rail 模式页内自持顶栏不再叠加：同 compact 只消费 bottom
+                Box(Modifier.fillMaxSize().padding(bottom = padding.calculateBottomPadding())) { content() }
+            }
+        }
     }
 }
