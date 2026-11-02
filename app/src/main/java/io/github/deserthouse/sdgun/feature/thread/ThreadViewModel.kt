@@ -25,6 +25,8 @@ class ThreadViewModel(
         { tid, fid -> ThreadRepository.fetchOP(tid, fid) },
     private val fetchFloors: suspend (tid: Long, page: Int, descending: Boolean, authorId: Long?) -> ThreadRepository.FloorsPage? =
         { tid, page, desc, aid -> ThreadRepository.fetchFloors(tid, page, desc, aid) },
+    /** Q1 跳楼轮询间隔（测试注入 1ms；生产 50ms） */
+    private val jumpPollMs: Long = 50,
 ) {
 
     var opState by androidx.compose.runtime.mutableStateOf<UiState<ThreadRepository.ThreadOP>>(UiState.InitialLoading)
@@ -140,6 +142,86 @@ class ThreadViewModel(
                 )
             }
             onDone()
+        }
+    }
+
+    // ── Q1 跳楼（B2-2 与 S07 pid 定位合流；A1-5 跨页二分挂账兑现）──
+
+    /** 跳楼状态：Idle / 扫描中（pid 或楼层号 + 当前进度） / 未找到 */
+    sealed class JumpState {
+        object Idle : JumpState()
+        data class Searching(val pid: Long?, val floor: Int?, val page: Int, val total: Int) : JumpState()
+        data class NotFound(val pid: Long?, val floor: Int?) : JumpState()
+    }
+
+    var jumpState by androidx.compose.runtime.mutableStateOf<JumpState>(JumpState.Idle)
+        private set
+
+    /** 已命中待滚动目标（pid 在当前 floors 列表内）；UI 滚动完成后调 [consumeLocate] */
+    var pendingLocate by androidx.compose.runtime.mutableStateOf<Long?>(null)
+        private set
+
+    private var jumpJob: Job? = null
+
+    fun clearLocate() { pendingLocate = null }
+
+    /**
+     * 跳转到目标楼层：已加载 → 即时定位；未加载 → 切正序+全部楼层后逐页扫描
+     * （护栏 ≤100 页），命中即定位。用户此前的倒序/只看楼主选择会被跳楼重置
+     * （跳楼定义上需要位置序，KDoc 如实披露）。
+     */
+    fun jumpTo(tid: Long, targetPid: Long? = null, targetFloor: Int? = null) {
+        if (targetPid == null && targetFloor == null) return
+        // 已加载层内命中（含倒序/只看楼主过滤下的当前列表）——即时定位，不动筛选
+        floors.firstOrNull { it.pid == targetPid || (targetFloor != null && it.floor == targetFloor) }
+            ?.let { hit ->
+                jumpState = JumpState.Idle
+                pendingLocate = hit.pid
+                return
+            }
+        jumpJob?.cancel()
+        jumpState = JumpState.Searching(targetPid, targetFloor, 1, 0)
+        jumpJob = scope.launch {
+            descending = false
+            posterOnly = false
+            restartFloors(tid)
+            var staleTicks = 0
+            var scanned = 0
+            while (scanned < 100) {
+                kotlinx.coroutines.delay(jumpPollMs)
+                val st = floorsState
+                when {
+                    st is UiState.InitialLoading -> continue  // 首页在途
+                    st is UiState.RetryableError || st is UiState.Empty -> {
+                        jumpState = JumpState.NotFound(targetPid, targetFloor); return@launch
+                    }
+                    st is UiState.Stale<*> -> {
+                        // 分页传输失败：稍候重试 loadMore（被 Data 门挡住则持续等）；
+                        // 持续 Stale（网络中断）→ 诚实未找到，不假称扫完
+                        if (++staleTicks > 40) {
+                            jumpState = JumpState.NotFound(targetPid, targetFloor); return@launch
+                        }
+                        loadMore(tid)
+                        continue
+                    }
+                }
+                staleTicks = 0
+                val hit = floors.firstOrNull {
+                    it.pid == targetPid || (targetFloor != null && it.floor == targetFloor)
+                }
+                if (hit != null) {
+                    jumpState = JumpState.Idle
+                    pendingLocate = hit.pid
+                    return@launch
+                }
+                if (floorPage >= floorTotal) {
+                    jumpState = JumpState.NotFound(targetPid, targetFloor); return@launch
+                }
+                loadMore(tid)
+                scanned++
+                jumpState = JumpState.Searching(targetPid, targetFloor, floorPage, floorTotal)
+            }
+            jumpState = JumpState.NotFound(targetPid, targetFloor)  // 护栏耗尽
         }
     }
 }

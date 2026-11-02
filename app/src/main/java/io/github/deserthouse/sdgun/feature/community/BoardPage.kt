@@ -8,9 +8,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -30,6 +34,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.deserthouse.sdgun.core.model.UiState
@@ -49,16 +54,21 @@ fun BoardPage(
     onOpenThread: (Long, String) -> Unit,
     onBack: () -> Unit = {},
     onLoadMore: (() -> Unit)? = null,
+    onRefresh: (() -> Unit)? = null,
+    isLoadingMore: Boolean = false,
     currentOrder: String = "",
     currentTypeId: String = "",
     onFilterChange: ((String, String) -> Unit)? = null,
     onPostThread: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
+    // B1-2：顶栏随滚动收起（enterAlways）——列表回顶不遮挡（M3 列表页范式）
+    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
     Scaffold(
-        modifier = modifier,
+        modifier = modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             TopAppBar(
+                scrollBehavior = scrollBehavior,
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
@@ -73,8 +83,11 @@ fun BoardPage(
                 },
                 actions = {
                     if (onPostThread != null) {
-                        IconButton(onClick = onPostThread) {
-                            Icon(Icons.Filled.Edit, contentDescription = "发帖")
+                        TextButton(onClick = onPostThread) {
+                            Icon(Icons.Filled.Edit, contentDescription = null,
+                                modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("发帖", style = MaterialTheme.typography.labelLarge)
                         }
                     }
                 },
@@ -84,6 +97,15 @@ fun BoardPage(
             )
         },
         containerColor = MaterialTheme.colorScheme.surface,
+        floatingActionButton = {
+            if (onPostThread != null) {
+                androidx.compose.material3.ExtendedFloatingActionButton(
+                    onClick = onPostThread,
+                    icon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+                    text = { Text("发帖") },
+                )
+            }
+        },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             val m = meta
@@ -97,11 +119,8 @@ fun BoardPage(
                 )
             }
             when (state) {
-                is UiState.InitialLoading -> Column(
-                    Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                ) { Text("加载中…", style = MaterialTheme.typography.bodyLarge) }
+                is UiState.InitialLoading -> io.github.deserthouse.sdgun.core.designsystem.SkeletonList(
+                    rows = 6, modifier = Modifier.fillMaxSize())
 
                 is UiState.Empty -> Column(
                     Modifier.fillMaxSize(),
@@ -130,29 +149,20 @@ fun BoardPage(
                 is UiState.Stale<*> -> {
                     val pr = state.stale as? BoardListRepository.PageResult
                     if (pr != null) {
-                        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                            Text(
-                                state.error,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                            )
-                            pr.rows.forEach { row ->
-                                ThreadRowItem(row) { onOpenThread(row.tid, row.title) }
-                            }
-                            MoreRow(pr, onLoadMore)
-                        }
+                        BoardRowsList(pr, onOpenThread, onLoadMore, staleError = state.error)
                     }
                 }
 
-                is UiState.Data<*> -> {
-                    val pr = state.value as? BoardListRepository.PageResult
+                is UiState.Data<*>, is UiState.Refreshing<*> -> {
+                    @Suppress("UNCHECKED_CAST")
+                    val pr = (state as? UiState.Data<BoardListRepository.PageResult>)?.value
+                        ?: (state as? UiState.Refreshing<BoardListRepository.PageResult>)?.stale
                     if (pr != null) {
-                        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                            pr.rows.forEach { row ->
-                                ThreadRowItem(row) { onOpenThread(row.tid, row.title) }
-                            }
-                            MoreRow(pr, onLoadMore)
+                        io.github.deserthouse.sdgun.core.designsystem.B1PullToRefresh(
+                            refreshing = state is UiState.Refreshing<*>,
+                            onRefresh = { onRefresh?.invoke() },
+                        ) {
+                            BoardRowsList(pr, onOpenThread, onLoadMore, isLoadingMore = isLoadingMore)
                         }
                     }
                 }
@@ -208,14 +218,48 @@ private fun BoardFilterBar(
     }
 }
 
-/** 下一页入口：仓库 total_page 权威（A70-06 前置：板块不因首页渲染而丢失第二页） */
+/** B1-4：板块行 LazyColumn+尾部预取（替换 Column+verticalScroll+MoreRow 手动挡） */
 @Composable
-private fun MoreRow(pr: BoardListRepository.PageResult, onLoadMore: (() -> Unit)?) {
-    if (onLoadMore != null && pr.page < pr.totalPages) {
-        TextButton(
-            onClick = onLoadMore,
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        ) { Text("加载更多") }
+private fun BoardRowsList(
+    pr: BoardListRepository.PageResult,
+    onOpenThread: (Long, String) -> Unit,
+    onLoadMore: (() -> Unit)?,
+    staleError: String? = null,
+    isLoadingMore: Boolean = false,
+) {
+    val listState = rememberLazyListState()
+    io.github.deserthouse.sdgun.core.designsystem.InfiniteScrollHandler(
+        listState = listState,
+        isLoadingMore = isLoadingMore,
+        hasMore = onLoadMore != null && pr.page < pr.totalPages,
+        onLoadMore = { onLoadMore?.invoke() },
+    )
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 6.dp),
+    ) {
+        if (staleError != null) {
+            item(key = "stale") {
+                Text(
+                    staleError,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+        }
+        items(pr.rows, key = { it.tid }) { row ->
+            ThreadRowItem(row) { onOpenThread(row.tid, row.title) }
+        }
+        if (onLoadMore != null && pr.page < pr.totalPages) {
+            item(key = "load_more") {
+                TextButton(
+                    onClick = onLoadMore,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                ) { Text("加载更多") }
+            }
+        }
     }
 }
 

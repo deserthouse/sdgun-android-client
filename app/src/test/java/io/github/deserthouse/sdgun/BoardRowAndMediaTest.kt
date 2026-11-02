@@ -19,7 +19,11 @@ class BoardRowAndMediaTest {
         val rows = BoardListRepository.parseRows(json)
         assertEquals(1, rows.size)
         assertEquals("531", rows[0].replyCount)
-        assertTrue("unix 时间应被格式化(非原始数字)", rows[0].lastReplyTime?.matches(Regex("\\d{4}-\\d{1,2}-\\d{1,2} \\d{2}:\\d{2}")) == true)
+        // B1-7 后契约：unix 秒→相对时间（近 7 天）或绝对时间——两者都非裸数字
+        assertTrue(
+            "unix 时间应被格式化(非原始数字)",
+            rows[0].lastReplyTime?.matches(Regex("\\d{4}-\\d{1,2}-\\d{1,2} \\d{2}:\\d{2}")) == true ||
+                rows[0].lastReplyTime?.endsWith("前") == true)
     }
 
     @Test

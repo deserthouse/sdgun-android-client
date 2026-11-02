@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.widthIn
@@ -16,6 +17,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -55,6 +58,14 @@ import io.github.deserthouse.sdgun.web.GalleryData
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ThreadPage(
+    onOpenUrl: (String) -> Unit = {},
+    /** A1-3：附件块下载（DownloadManager+WebView Cookie） */
+    onDownloadAttachment: (String, String) -> Unit = { _, _ -> },
+    onLocateQuote: (Long) -> Unit = {},
+    onReplyToQuote: (Long) -> Unit = {},
+    onShare: (String) -> Unit = {},
+    /** R2/F17：举报（jadx ReportComp 同构 H5 通道：userReportView?type=14&type_value=base64(contentId)） */
+    onReport: (contentId: String) -> Unit = {},
     opState: UiState<ThreadRepository.ThreadOP>,
     floorsState: UiState<ThreadRepository.FloorsPage>,
     descending: Boolean,
@@ -63,6 +74,12 @@ fun ThreadPage(
     onTogglePoster: () -> Unit,
     onLoadMore: () -> Unit,
     onRetryFloors: () -> Unit,
+    /** Q1 跳楼：输入楼层号直达（VM 统一裁决：已加载即时定位/未加载跨页扫描） */
+    jumpState: ThreadViewModel.JumpState = ThreadViewModel.JumpState.Idle,
+    onJumpToFloor: (Int) -> Unit = {},
+    /** Q1：VM 已命中待滚动的 pid（引用点击/深链 pid/跳楼命中共用一条通路） */
+    locateRequest: Long? = null,
+    onLocateHandled: () -> Unit = {},
     onBack: () -> Unit,
     // G4 写操作（路由层持有状态与提交；本页只渲染+回调）
     isLoggedIn: Boolean,
@@ -162,12 +179,95 @@ fun ThreadPage(
                     Modifier.fillMaxSize().padding(padding),
                     horizontalArrangement = Arrangement.Center,
                 ) {
-                LazyColumn(
-                    Modifier
-                        .fillMaxSize()
-                        .widthIn(max = 720.dp),
-                ) {
+                val floorsListState = androidx.compose.foundation.lazy.rememberLazyListState()
+                // Q1 跳楼对话框 + 定位命中滚动（引用点击/深链 pid/楼层号输入共用一条通路）
+                var showJumpDialog by androidx.compose.runtime.remember {
+                    androidx.compose.runtime.mutableStateOf(false)
+                }
+                var jumpInput by androidx.compose.runtime.remember {
+                    androidx.compose.runtime.mutableStateOf("")
+                }
+                androidx.compose.runtime.LaunchedEffect(locateRequest, floorsState, jumpState) {
+                    val target = locateRequest ?: return@LaunchedEffect
+                    val fs = floorsState
+                    val list = when (fs) {
+                        is UiState.Data<*> -> (fs.value as? ThreadRepository.FloorsPage)?.floors
+                        is UiState.Stale<*> -> (fs.stale as? ThreadRepository.FloorsPage)?.floors
+                        else -> null
+                    } ?: return@LaunchedEffect
+                    val idx = list.indexOfFirst { it.pid == target }
+                    if (idx >= 0) {
+                        val banner = if (fs is UiState.Stale<*>) 1 else 0
+                        // 项序：op_head(1) + 主楼内容块 + controls(1) + 楼层（Stale 加横幅 1）
+                        floorsListState.animateScrollToItem(1 + opBlocks.size + 1 + banner + idx)
+                        onLocateHandled()
+                    }
+                }
+                if (showJumpDialog) {
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest = { showJumpDialog = false; jumpInput = "" },
+                        title = { Text("跳转到楼层") },
+                        text = {
+                            androidx.compose.material3.OutlinedTextField(
+                                value = jumpInput,
+                                onValueChange = { v -> jumpInput = v.filter { it.isDigit() }.take(6) },
+                                label = { Text("楼层号（如 3385）") },
+                                singleLine = true,
+                            )
+                        },
+                        confirmButton = {
+                            val n = jumpInput.toIntOrNull()
+                            androidx.compose.material3.TextButton(
+                                onClick = {
+                                    showJumpDialog = false
+                                    if (n != null && n > 0) onJumpToFloor(n)
+                                    jumpInput = ""
+                                },
+                                enabled = n != null && n > 0,
+                            ) { Text("跳转") }
+                        },
+                        dismissButton = {
+                            androidx.compose.material3.TextButton(
+                                onClick = { showJumpDialog = false; jumpInput = "" },
+                            ) { Text("取消") }
+                        },
+                    )
+                }
+    LazyColumn(
+        state = floorsListState,
+        modifier = Modifier
+            .fillMaxSize()
+            .widthIn(max = 720.dp),
+    ) {
                     item(key = "op_head") {
+                        // A1-9：原生分享（标准文本：标题+H5 链接）；tid 经 op 不可得时降级仅标题
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = {
+                                val opTitle = (opState as? UiState.Data<*>)?.value
+                                    as? ThreadRepository.ThreadOP
+                                val link = opTitle?.let {
+                                    " https://bbs.sdgun.com.cn/forum.php?mod=viewthread&tid=${it.tid}&mobile=2"
+                                } ?: ""
+                                onShare((opTitle?.title ?: "") + link)
+                            }) {
+                                Icon(
+                                    androidx.compose.material.icons.Icons.Filled.Share,
+                                    contentDescription = "分享",
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text("分享", style = MaterialTheme.typography.labelMedium)
+                            }
+                            if (onReport != {}) {
+                                TextButton(onClick = {
+                                    val opv = (opState as? UiState.Data<*>)?.value
+                                        as? ThreadRepository.ThreadOP
+                                    onReport(opv?.pid?.toString() ?: "")
+                                }) {
+                                    Text("举报", style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
+                        }
                         OpHeader(
                             op,
                             applauded = op.pid in applaudedIds,
@@ -176,18 +276,25 @@ fun ThreadPage(
                             collectState = collectState,
                             onApplaud = { onApplaud(op.pid) },
                             onCollect = onCollect,
+                            onShare = {
+                                val link = " https://bbs.sdgun.com.cn/forum.php?mod=viewthread&tid=${op.tid}&mobile=2"
+                                onShare(op.title + link)
+                            },
+                            onReport = { onReport(op.pid.toString()) },
                         )
                     }
                     items(opBlocks, key = { it.key }) { block ->
-                        BlockView(block, opGroup, openViewer)
+                        BlockView(block, opGroup, openViewer, onOpenUrl, onDownloadAttachment)
                     }
                     item(key = "controls") {
                         FloorControls(
                             descending = descending, posterOnly = posterOnly,
                             onToggleOrder = onToggleOrder, onTogglePoster = onTogglePoster,
+                            onJump = { showJumpDialog = true },
+                            jumpStatus = jumpState,
                         )
                     }
-                    floorsItems(floorsState, applaudStates, applaudedIds, onApplaud, onRetryFloors, onLoadMore, openViewer)
+                    floorsItems(floorsState, applaudStates, applaudedIds, onApplaud, onRetryFloors, onLoadMore, openViewer, onOpenUrl, onDownloadAttachment, onLocateQuote, onReplyToQuote)
                     moreItem(floorsState, onLoadMore)
                 }
                 }
@@ -198,23 +305,45 @@ fun ThreadPage(
     }
 }
 
-/** 排序/只看楼主控制行（A70-04：常驻，不随筛选消失）。 */
+/** 排序/只看楼主控制行（A70-04：常驻，不随筛选消失）；Q1：跳楼入口+扫描/未找到状态行。 */
 @Composable
 private fun FloorControls(
     descending: Boolean,
     posterOnly: Boolean,
     onToggleOrder: () -> Unit,
     onTogglePoster: () -> Unit,
+    onJump: () -> Unit = {},
+    jumpStatus: ThreadViewModel.JumpState = ThreadViewModel.JumpState.Idle,
 ) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        TextButton(onClick = onToggleOrder) {
-            Text(if (descending) "正序" else "倒序")
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            TextButton(onClick = onToggleOrder) {
+                Text(if (descending) "正序" else "倒序")
+            }
+            TextButton(onClick = onTogglePoster) {
+                Text(if (posterOnly) "全部楼层" else "只看楼主")
+            }
+            TextButton(onClick = onJump) {
+                Text("跳楼")
+            }
         }
-        TextButton(onClick = onTogglePoster) {
-            Text(if (posterOnly) "全部楼层" else "只看楼主")
+        when (val js = jumpStatus) {
+            is ThreadViewModel.JumpState.Searching -> Text(
+                "正在定位… 第 ${js.page}/${js.total} 页",
+                Modifier.padding(horizontal = 16.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            is ThreadViewModel.JumpState.NotFound -> Text(
+                "未找到目标楼层（可能已删除或超出扫描范围）",
+                Modifier.padding(horizontal = 16.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            ThreadViewModel.JumpState.Idle -> {}
         }
     }
 }
@@ -228,6 +357,10 @@ private fun LazyListScope.floorsItems(
     onRetryFloors: () -> Unit,
     onLoadMore: () -> Unit,
     onOpenImage: (List<String>, Int) -> Unit,
+    onOpenUrl: (String) -> Unit = {},
+    onDownloadAttachment: (String, String) -> Unit = { _, _ -> },
+    onLocateQuote: (Long) -> Unit = {},
+    onReplyToQuote: (Long) -> Unit = {},
 ) {
     when (val fs = floorsState) {
         is UiState.InitialLoading -> item(key = "floors_loading") {
@@ -260,11 +393,11 @@ private fun LazyListScope.floorsItems(
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
-            floorEntries(fs.stale, applaudStates, applaudedIds, onApplaud, onOpenImage)
+            floorEntries(fs.stale, applaudStates, applaudedIds, onApplaud, onOpenImage, onOpenUrl, onDownloadAttachment, onLocateQuote, onReplyToQuote)
         }
 
         is UiState.Data<ThreadRepository.FloorsPage> -> {
-            floorEntries(fs.value, applaudStates, applaudedIds, onApplaud, onOpenImage)
+            floorEntries(fs.value, applaudStates, applaudedIds, onApplaud, onOpenImage, onOpenUrl, onDownloadAttachment, onLocateQuote, onReplyToQuote)
             // R1：more 行不随筛选消失（挂在分支尾，page<totalPages 才显示）
             if (fs.value.page < fs.value.totalPages) {
                 item(key = "more") {
@@ -285,9 +418,13 @@ private fun LazyListScope.floorEntries(
     applaudedIds: Set<Long>,
     onApplaud: (Long) -> Unit,
     onOpenImage: (List<String>, Int) -> Unit,
+    onOpenUrl: (String) -> Unit = {},
+    onDownloadAttachment: (String, String) -> Unit = { _, _ -> },
+    onLocateQuote: (Long) -> Unit = {},
+    onReplyToQuote: (Long) -> Unit = {},
 ) {
     items(fp.floors, key = { "f_${it.pid}" }) { floor ->
-        FloorCard(floor, applaudStates[floor.pid] ?: WriteUi(), floor.pid in applaudedIds, onApplaud, onOpenImage)
+        FloorCard(floor, applaudStates[floor.pid] ?: WriteUi(), floor.pid in applaudedIds, onApplaud, onOpenImage, onOpenUrl, onDownloadAttachment, onLocateQuote, onReplyToQuote)
     }
 }
 
@@ -315,6 +452,8 @@ private fun OpHeader(
     collectState: WriteUi,
     onApplaud: () -> Unit,
     onCollect: () -> Unit,
+    onShare: () -> Unit = {},
+    onReport: () -> Unit = {},
 ) {
     Column(Modifier.padding(16.dp)) {
         Text(op.title, style = MaterialTheme.typography.titleLarge)
@@ -322,7 +461,7 @@ private fun OpHeader(
         Row(verticalAlignment = Alignment.CenterVertically) {
             AvatarPlaceholder(op.authorName, 36.dp)
             Spacer(Modifier.width(8.dp))
-            Column {
+            Column(Modifier.weight(1f)) {
                 Text(
                     op.authorName ?: "匿名",
                     style = MaterialTheme.typography.labelLarge,
@@ -330,7 +469,12 @@ private fun OpHeader(
                 )
                 Text(
                     listOfNotNull(
-                        op.createTime,
+                        // B0-4（V4 根因更正）：createTime 为裸 unix 秒（截图 1793284436 实证），
+                        // 格式化后上屏——非 uid 泄漏
+                        op.createTime?.let {
+                            io.github.deserthouse.sdgun.data.repository.BoardListRepository
+                                .relativeTime(it)
+                        },
                         op.viewCount?.let { "查看 $it" },
                         op.replyCount?.let { "回复 $it" },
                     ).joinToString(" · "),
@@ -338,20 +482,45 @@ private fun OpHeader(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            Spacer(Modifier.weight(1f))
+            // N5/V02：分享/举报小图标钮并入作者行（不再独占一行）
+            IconButton(onClick = onShare, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    androidx.compose.material.icons.Icons.Filled.Share,
+                    contentDescription = "分享",
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            IconButton(onClick = onReport, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    Icons.Outlined.Flag,  // V02/Q2 修正：Flag 是扩展属性，全限定名不可解析（该行 V02 引入后从未真正编译——幻绿窗口实证）
+                    contentDescription = "举报",
+                    modifier = Modifier.size(16.dp),
+                )
+            }
         }
         Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = onApplaud) {
+            // S03 禁重复 + Q2 toggle：Done 不再是终态（已赞再点=取消，路由层
+            // WriteOps.decideApplaud 分流）——仅 Pending 在途禁点
+            TextButton(
+                onClick = onApplaud,
+                enabled = applaudState.phase != WriteUiPhase.Pending,
+            ) {
                 Text(
                     when (applaudState.phase) {
                         WriteUiPhase.Pending -> "点赞中…"
-                        WriteUiPhase.Done -> "已点赞"
+                        WriteUiPhase.Done -> if (applauded) "已点赞 · 取消" else "点赞"
                         WriteUiPhase.Failed -> "点赞失败"
                         WriteUiPhase.Verify -> "点赞待核对"
                         WriteUiPhase.Idle -> if (applauded) "已点赞" else "点赞"
                     }
                 )
             }
-            TextButton(onClick = onCollect) {
+            TextButton(
+                onClick = onCollect,
+                enabled = collectState.phase !in setOf(WriteUiPhase.Pending, WriteUiPhase.Done) &&
+                    !(collectState.phase == WriteUiPhase.Idle && isCollected),
+            ) {
                 Text(
                     when (collectState.phase) {
                         WriteUiPhase.Pending -> "收藏中…"

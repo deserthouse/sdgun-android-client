@@ -8,6 +8,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.github.deserthouse.sdgun.data.repository.ProfileRepository
 
@@ -15,19 +16,15 @@ import io.github.deserthouse.sdgun.data.repository.ProfileRepository
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MessagesPage(
-    groups: List<ProfileRepository.MessageGroup>,
+    groups: List<ProfileRepository.MessageGroup>?,
     isLoading: Boolean,
     onOpenGroup: (ProfileRepository.MessageGroup) -> Unit = {},
     onOpenNotifications: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    // A28-03 单一壳契约：顶栏归 TabShell（title="消息"），页内不再持有 TopAppBar
     Scaffold(
         modifier = modifier,
-        topBar = {
-            TopAppBar(title = { Text("消息") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface))
-        },
         containerColor = MaterialTheme.colorScheme.surface,
     ) { padding ->
         if (isLoading) {
@@ -35,6 +32,13 @@ fun MessagesPage(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center) {
                 CircularProgressIndicator()
+            }
+        } else if (groups == null) {
+            // A28-06：fetch 失败（null）不再吞成"暂无消息"
+            Column(Modifier.fillMaxSize().padding(padding),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center) {
+                Text("消息加载失败，稍后重试", style = MaterialTheme.typography.bodyLarge)
             }
         } else {
             LazyColumn(Modifier.fillMaxSize().padding(padding),
@@ -57,7 +61,23 @@ fun MessagesPage(
                 } else {
                     items(groups, key = { it.id }) { g ->
                         ListItem(
-                            headlineContent = { Text(g.name) },
+                            headlineContent = {
+                                // B1-6：未读感=加粗+尾部数字徽章（真实未读位=凭据门挂账）
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        g.name,
+                                        fontWeight = if (g.count > 0) FontWeight.SemiBold else null,
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    if (g.count > 0) {
+                                        androidx.compose.material3.BadgedBox(
+                                            badge = {
+                                                androidx.compose.material3.Badge { Text("${g.count}") }
+                                            },
+                                        ) { Spacer(Modifier.width(2.dp)) }
+                                    }
+                                }
+                            },
                             supportingContent = { Text("${g.count} 条") },
                             modifier = Modifier.clickableRow { onOpenGroup(g) },
                         )

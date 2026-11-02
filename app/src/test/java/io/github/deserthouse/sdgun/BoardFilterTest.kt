@@ -109,4 +109,78 @@ class BoardFilterTest {
         delay(100)
         assertEquals("同筛选重复设置=零新请求", 2, calls)  // start 1 次 + setFilter 1 次
     }
+
+    @org.junit.Test
+    fun `refresh 保旧行进 Refreshing 且成功换新首页`() = kotlinx.coroutines.runBlocking {
+        var call = 0
+        val vm = BoardViewModel(
+            this,
+            fetchPage = { _, page, _, _ ->
+                call++
+                if (page == 1 && call == 1) {
+                    kotlinx.coroutines.delay(30)
+                    rowPage(1, listOf(1, 2))
+                } else rowPage(1, listOf(9))
+            },
+            fetchMeta = { null },
+        )
+        vm.start(1)
+        kotlinx.coroutines.delay(150)
+        org.junit.Assert.assertTrue(vm.listState is UiState.Data<*>)
+        vm.refresh(1)
+        org.junit.Assert.assertTrue(
+            "refresh 应进 Refreshing 保旧行", vm.listState is UiState.Refreshing<*>)
+        kotlinx.coroutines.delay(150)
+        val st = vm.listState as UiState.Data<BoardListRepository.PageResult>
+        org.junit.Assert.assertEquals(listOf(9L), st.value.rows.map { it.tid })
+    }
+
+    // ── R0-2（A31-S01）反例：刷新失败保旧行；Stale 态可重试分页 ──
+    @org.junit.Test
+    fun `refresh 失败保旧行进 Stale 且页元数据回滚`() = kotlinx.coroutines.runBlocking {
+        var fail = false
+        val vm = BoardViewModel(
+            this,
+            fetchPage = { _, page, _, _ ->
+                if (fail) null else rowPage(page, listOf((page * 10).toLong(), (page * 10 + 1).toLong()))
+            },
+            fetchMeta = { null },
+        )
+        vm.start(1)
+        kotlinx.coroutines.delay(150)
+        vm.loadMore(1)
+        kotlinx.coroutines.delay(150)
+        val before = vm.listState as UiState.Data<BoardListRepository.PageResult>
+        org.junit.Assert.assertEquals(4, before.value.rows.size)  // p1+p2 各 2 行
+        fail = true
+        vm.refresh(1)
+        kotlinx.coroutines.delay(150)
+        val st = vm.listState
+        org.junit.Assert.assertTrue("刷新失败应进 Stale 保旧", st is UiState.Stale<*>)
+        org.junit.Assert.assertEquals(
+            "旧行完整保留", 4,
+            (st as UiState.Stale<BoardListRepository.PageResult>).stale.rows.size)
+    }
+
+    @org.junit.Test
+    fun `Stale 态 loadMore 可按原意图重试下一页`() = kotlinx.coroutines.runBlocking {
+        var p2Fails = true
+        val vm = BoardViewModel(
+            this,
+            fetchPage = { _, page, _, _ ->
+                if (page == 2 && p2Fails) null else rowPage(page, listOf((page * 10).toLong()))
+            },
+            fetchMeta = { null },
+        )
+        vm.start(1)
+        kotlinx.coroutines.delay(150)
+        vm.loadMore(1)  // p2 失败 → Stale(1 行)
+        kotlinx.coroutines.delay(150)
+        org.junit.Assert.assertTrue(vm.listState is UiState.Stale<*>)
+        p2Fails = false
+        vm.loadMore(1)  // Stale 态重试（旧 !is Data 门=此击被吞，审查实锤）
+        kotlinx.coroutines.delay(150)
+        val st = vm.listState as UiState.Data<BoardListRepository.PageResult>
+        org.junit.Assert.assertEquals("p1+p2 合并", listOf(10L, 20L), st.value.rows.map { it.tid })
+    }
 }

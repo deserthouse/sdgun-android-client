@@ -88,4 +88,31 @@ class MutationTransportTest {
         val g = gateway(staticTransport(200, """{"success":true}"""))
         assertTrue(g is HttpMutationGateway)
     }
+
+    // ── A28-02 反例（2026-10-29 AF29 复审实锤，先失败后修）──
+    // 非成功状态码绝不 Confirmed；success 必须是严格布尔类型
+    @Test
+    fun `403 with success true payload must not confirm`() {
+        val v = io.github.deserthouse.sdgun.core.mutation.MutationResponseAdapter
+            .judge(403, """{"success":true,"msg":"ok"}""")
+        org.junit.Assert.assertTrue(
+            "403+success:true 不得 Confirmed（实际=$v）", v !is io.github.deserthouse.sdgun.core.mutation.MutationVerdict.Confirmed)
+    }
+
+    @Test
+    fun `500 with success true payload must not confirm`() {
+        val v = io.github.deserthouse.sdgun.core.mutation.MutationResponseAdapter
+            .judge(500, """{"success":true}""")
+        org.junit.Assert.assertTrue(
+            "500+success:true 不得 Confirmed", v !is io.github.deserthouse.sdgun.core.mutation.MutationVerdict.Confirmed)
+    }
+
+    @Test
+    fun `string success true must not confirm`() {
+        // org.json optBoolean 会把字符串 "true" parseBoolean——必须先验类型
+        val v = io.github.deserthouse.sdgun.core.mutation.MutationResponseAdapter
+            .judge(200, """{"success":"true"}""")
+        org.junit.Assert.assertTrue(
+            "success:\"true\"（字符串）不得 Confirmed", v !is io.github.deserthouse.sdgun.core.mutation.MutationVerdict.Confirmed)
+    }
 }

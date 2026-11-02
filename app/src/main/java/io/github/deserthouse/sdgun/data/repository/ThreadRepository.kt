@@ -50,6 +50,8 @@ object ThreadRepository {
         /** R6：被引用楼层摘要（to_comment；空=无引用） */
         val quoteAuthor: String? = null,
         val quoteText: String? = null,
+        /** A1-4（AF29-03）：被引用楼层 pid（to_comment.id；null=无引用/已删缺字段） */
+        val quotedPid: Long? = null,
         /** R7：视频附件 URL（非空=有视频，UI 给外链占位） */
         val videoUrl: String? = null,
     )
@@ -110,11 +112,13 @@ object ThreadRepository {
                     createTime = f.optString("time").takeIf { it.isNotBlank() && it != "null" },
                     applaudCount = f.optInt("applaud_count", -1).takeIf { it >= 0 },
                     isPublisher = f.optBoolean("is_publisher"),
-                    // R6 引用 / R7 视频（to_comment 形态=作者+正文；videos=外链数组首项）
+                    // R6 引用 / R7 视频（to_comment 形态=作者+正文+id=被引 pid；videos=外链数组首项）
                     quoteAuthor = f.optJSONObject("to_comment")?.optString("user_name")
                         ?.takeIf { it.isNotBlank() && it != "null" },
                     quoteText = f.optJSONObject("to_comment")?.optString("content")
                         ?.takeIf { it.isNotBlank() && it != "null" },
+                    quotedPid = f.optJSONObject("to_comment")?.optLong("id", 0L)
+                        ?.takeIf { it > 0 },
                     videoUrl = f.optJSONArray("videos")?.optString(0)
                         ?.takeIf { it.startsWith("http") },
                 )
@@ -159,4 +163,70 @@ object ThreadRepository {
             }
             parseFloors(get(url) ?: return@withContext null, page)
         }
+
+    // ── Q3：发帖栏目参数（threadAddColumnInfoV2）──
+
+    const val THREAD_ADD_COLUMN_INFO =
+        "https://mag1.sdgun.net/mag/circle/v1/forum/threadAddColumnInfoV2"
+
+    /**
+     * 发帖栏目参数（jadx ThreadPostActivity.toNet：GET fid[+sortid]；data.circle_id 服务端
+     * 下发[fid≠circle_id]、data.types=[{id,name}] 分类族）。
+     */
+    data class PostColumnInfo(val circleId: Long, val types: List<Pair<Int, String>>)
+
+    /** 纯函数解析（S05 口径：null=失败/拒绝/未知信封；合法空 types=空列表） */
+    fun parsePostColumnInfo(json: String): PostColumnInfo? {
+        return try {
+            val obj = JSONObject(json)
+            if (obj.has("success") && !obj.optBoolean("success")) return null
+            val d = obj.optJSONObject("data") ?: return null
+            val circleId = d.optLong("circle_id", 0L)
+            if (circleId <= 0) return null
+            val types = mutableListOf<Pair<Int, String>>()
+            d.optJSONArray("types")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val id = o.optInt("id", 0)
+                    val name = o.optString("name")
+                    if (id > 0 && name.isNotBlank()) types.add(id to name)
+                }
+            }
+            PostColumnInfo(circleId, types)
+        } catch (e: Exception) { null }
+    }
+
+    suspend fun fetchPostColumnInfo(token: String, fid: Long): PostColumnInfo? =
+        withContext(Dispatchers.IO) {
+            if (token.isBlank() || fid <= 0) return@withContext null
+            try {
+                val conn = URL("$THREAD_ADD_COLUMN_INFO?fid=$fid").openConnection()
+                    as HttpURLConnection
+                conn.connectTimeout = 12000
+                conn.readTimeout = 15000
+                conn.setRequestProperty(
+                    "User-Agent",
+                    "Mozilla/5.0 (Linux; Android 16; Pixel 8) MAGAPPX|6.4.0-2.90-30042|" +
+                        "Android 16 google Pixel 8|shuidan|koPx4DY3tw7hrg5nKpSmc3|" +
+                        "88af41c4c24832860d97d44e436f8842|174e1e66702c31aa7e949f5ab30db60b|$token",
+                )
+                try {
+                    parsePostColumnInfo(conn.inputStream.bufferedReader().readText())
+                } finally { conn.disconnect() }
+            } catch (e: Exception) { null }
+        }
+
+    /**
+     * Q3 成功定位：threadAdd 成功响应体中的新帖 tid（data.tid 或顶层 tid；
+     * 形态待真数据核=使用自然覆盖，解析不到返回 null=仅刷新列表定位）。
+     */
+    fun parseThreadAddTid(body: String?): Long? {
+        if (body.isNullOrBlank()) return null
+        return try {
+            val obj = JSONObject(body)
+            val d = obj.optJSONObject("data")
+            val fromData = d?.optLong("tid", 0L) ?: 0L
+            fromData.takeIf { it > 0 } ?: obj.optLong("tid", 0L).takeIf { it > 0 }
+        } catch (e: Exception) { null }
+    }
 }

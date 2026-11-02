@@ -43,7 +43,7 @@ object MutationRunner {
         if (!epochCurrent(epochCapture)) return MutationState.Draft
         return when (result) {
             null -> MutationState.OutcomeUnknown.also { onState(it) }
-            is MutationResult.Confirmed -> MutationState.Confirmed.also { onState(it) }
+            is MutationResult.Confirmed -> MutationState.Confirmed(result.payload).also { onState(it) }
             is MutationResult.Rejected -> MutationState.Rejected(result.msg).also { onState(it) }
             is MutationResult.OutcomeUnknown -> MutationState.OutcomeUnknown.also { onState(it) }
         }

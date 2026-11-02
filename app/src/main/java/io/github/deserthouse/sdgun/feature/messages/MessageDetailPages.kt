@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -31,11 +32,18 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import io.github.deserthouse.sdgun.core.model.UiState
+import io.github.deserthouse.sdgun.core.model.WriteUi
+import io.github.deserthouse.sdgun.core.model.WriteUiPhase
 
 /**
  * U3-b（F20/21）：消息会话详情+通知中心（合成先行）。
@@ -75,9 +83,13 @@ fun syntheticNotify(): NotifyData = NotifyData(
 @Composable
 fun ConversationDetailPage(
     groupName: String,
-    data: ConversationData?,
-    isLoading: Boolean,
+    state: UiState<ConversationData>,
     onBack: () -> Unit,
+    onRetry: () -> Unit = {},
+    /** Q2：真链会话（peerUid>0 且登录）可发送；合成/旧缓存会话保持封存提示（诚实） */
+    canSend: Boolean = false,
+    sendState: WriteUi = WriteUi(),
+    onSend: ((String) -> Unit)? = null,
 ) {
     Scaffold(
         topBar = {
@@ -94,42 +106,102 @@ fun ConversationDetailPage(
         },
         containerColor = MaterialTheme.colorScheme.surface,
         bottomBar = {
-            // 写面封存（真实发送=用户 MANUAL 验收后解锁）——诚实禁用不冒充可用
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedTextField(
-                    value = "",
-                    onValueChange = {},
-                    modifier = Modifier.weight(1f),
-                    enabled = false,
-                    placeholder = { Text("消息发送待真实验收后开放") },
-                    singleLine = true,
-                )
-                Icon(
-                    Icons.AutoMirrored.Filled.Send,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
-                )
+            if (canSend && onSend != null) {
+                // Q2：私信发送（userMessageSendMsg POST uid+content，jadx LetterChatActivity
+                // 同构；新口径=合成关闭制，真实收发由登录态用户自然验证）。
+                // Confirmed 清空输入；Rejected 保留输入显错；Unknown→Verify 调用方核对。
+                var text by remember { mutableStateOf("") }
+                LaunchedEffect(sendState) {
+                    if (sendState.phase == WriteUiPhase.Done) text = ""
+                }
+                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedTextField(
+                            value = text,
+                            onValueChange = { text = it },
+                            modifier = Modifier.weight(1f),
+                            enabled = sendState.phase != WriteUiPhase.Pending,
+                            placeholder = { Text("发消息…") },
+                            singleLine = true,
+                        )
+                        TextButton(
+                            onClick = { onSend?.invoke(text.trim()) },
+                            enabled = text.isNotBlank() && sendState.phase != WriteUiPhase.Pending,
+                        ) {
+                            Text(if (sendState.phase == WriteUiPhase.Pending) "…" else "发送")
+                        }
+                    }
+                    val hint = when (sendState.phase) {
+                        WriteUiPhase.Failed -> sendState.reason ?: "发送失败"
+                        WriteUiPhase.Verify -> "上次发送结果未知，待核对"
+                        WriteUiPhase.Done -> "已发送"
+                        else -> null
+                    }
+                    hint?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (sendState.phase == WriteUiPhase.Failed)
+                                MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            } else {
+                // 封存提示（合成会话/无 uid/未登录=诚实不可发，不冒充可用）
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedTextField(
+                        value = "",
+                        onValueChange = {},
+                        modifier = Modifier.weight(1f),
+                        enabled = false,
+                        placeholder = { Text("该会话暂不可发送") },
+                        singleLine = true,
+                    )
+                    Icon(
+                        Icons.AutoMirrored.Filled.Send,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+                    )
+                }
             }
         },
     ) { padding ->
-        when {
-            isLoading -> Column(
+        // A28-01 补充修正：八态完整消费（旧 nullable data/isLoading 把错误/空压成空白）
+        when (state) {
+            is UiState.InitialLoading -> Column(
                 Modifier.fillMaxSize().padding(padding),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) { Text("加载中…", style = MaterialTheme.typography.bodyLarge) }
 
-            data == null -> Column(
+            is UiState.Empty -> Column(
                 Modifier.fillMaxSize().padding(padding),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
-            ) { Text("会话详情读取待接口接入", style = MaterialTheme.typography.bodyLarge) }
+            ) { Text(state.message ?: "暂无消息", style = MaterialTheme.typography.bodyLarge) }
 
-            else -> LazyColumn(
+            is UiState.RetryableError -> Column(
+                Modifier.fillMaxSize().padding(padding),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(state.error, style = MaterialTheme.typography.bodyLarge)
+                TextButton(onClick = onRetry, modifier = Modifier.padding(top = 12.dp)) {
+                    Text("重试")
+                }
+            }
+
+            is UiState.Data<*> -> {
+                val data = state.value as ConversationData
+                LazyColumn(
                 Modifier.fillMaxSize().padding(padding),
                 contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -156,6 +228,9 @@ fun ConversationDetailPage(
                     }
                 }
             }
+            }
+
+            else -> {}
         }
     }
 }
@@ -166,6 +241,7 @@ fun NotificationPage(
     state: UiState<NotifyData>,
     onBack: () -> Unit,
     onRetry: () -> Unit,
+    onOpenLink: ((String) -> Unit)? = null,
 ) {
     val ctx = LocalContext.current
     // POST_NOTIFICATIONS 运行时权限（targetSdk 33+）：拒绝态给系统设置入口；
@@ -244,10 +320,16 @@ fun NotificationPage(
                     LazyColumn(
                         contentPadding = PaddingValues(vertical = 6.dp),
                     ) {
-                        items(d.categories, key = { it.name }) { c ->
+                        items(d.categories, key = { it.name + it.summary }) { c ->
+                            // R3/A4-4：link 非空=真链行可点外开（合成行 route 空串不可点）
                             ListItem(
                                 headlineContent = { Text(c.name) },
                                 supportingContent = { Text(c.summary) },
+                                modifier = Modifier.fillMaxWidth()
+                                    .then(
+                                        if (c.route.isNotBlank()) Modifier.clickable { onOpenLink?.invoke(c.route) }
+                                        else Modifier,
+                                    ),
                             )
                         }
                     }

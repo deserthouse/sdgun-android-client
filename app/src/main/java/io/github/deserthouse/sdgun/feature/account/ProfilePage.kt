@@ -32,23 +32,17 @@ import io.github.deserthouse.sdgun.data.repository.ProfileRepository
 fun ProfilePage(
     state: UiState<ProfileRepository.UserProfile>,
     onBack: () -> Unit,
-    onOpenSettings: () -> Unit = {},
     onLogout: () -> Unit = {},
+    /** A5-2：网页会话同步桥（手动触发，绝不自动；null=响应未携带不显示） */
+    webSessionUrl: String? = null,
+    onOpenWebSession: ((String) -> Unit)? = null,
     onOpenPeople: ((io.github.deserthouse.sdgun.feature.profile.PeopleKind) -> Unit)? = null,
     onOpenCollect: () -> Unit = {},
     onOpenServices: () -> Unit = {},
+    onOpenLocalHistory: () -> Unit = {},
 ) {
+    // A28-03 单一壳契约：顶栏归 TabShell（title="我的"+齿轮动作），页内不再持有
     Scaffold(
-        topBar = {
-            TopAppBar(title = { Text("个人中心") },
-                actions = {
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Outlined.Settings, contentDescription = "设置")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface))
-        },
         containerColor = MaterialTheme.colorScheme.surface,
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
@@ -82,13 +76,24 @@ fun ProfilePage(
             // U3-b 功能入口行（F18/19）：导航入口不依赖资料加载态（资料失败时仍可达）
             if (onOpenPeople != null) {
                 androidx.compose.material3.HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                // A31-S05 澄清：HISTORY 实为「访问过的用户」（myViewUser），本地帖历史另列
                 io.github.deserthouse.sdgun.feature.profile.PeopleKind.entries.forEach { kind ->
                     ListItem(
-                        headlineContent = { Text(kind.title) },
+                        headlineContent = {
+                            Text(
+                                if (kind == io.github.deserthouse.sdgun.feature.profile.PeopleKind.HISTORY)
+                                    "访问过的用户" else kind.title,
+                            )
+                        },
                         modifier = Modifier.fillMaxWidth()
                             .clickable { onOpenPeople(kind) },
                     )
                 }
+                ListItem(
+                    headlineContent = { Text("帖子历史") },
+                    modifier = Modifier.fillMaxWidth()
+                        .clickable(onClick = onOpenLocalHistory),
+                )
                 ListItem(
                     headlineContent = { Text("收藏") },
                     modifier = Modifier.fillMaxWidth()
@@ -100,6 +105,15 @@ fun ProfilePage(
                     modifier = Modifier.fillMaxWidth()
                         .clickable(onClick = onOpenServices),
                 )
+                // A5-2：网页会话同步（手动——用户显式点按才触发；桥 URL 一次性，
+                // 经 WebView 加载完成 Cookie 同步；不自动触发=红线）
+                if (webSessionUrl != null && onOpenWebSession != null) {
+                    ListItem(
+                        headlineContent = { Text("同步网页会话（发帖页免重复登录）") },
+                        modifier = Modifier.fillMaxWidth()
+                            .clickable(enabled = true) { onOpenWebSession.invoke(webSessionUrl) },
+                    )
+                }
                 androidx.compose.material3.HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
             }
             Spacer(Modifier.weight(1f))
@@ -112,3 +126,4 @@ fun ProfilePage(
         }
     }
 }
+

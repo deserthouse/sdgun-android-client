@@ -39,7 +39,9 @@ sealed interface MutationState {
     data object Draft : MutationState
     data object Validating : MutationState
     data object Submitting : MutationState
-    data object Confirmed : MutationState
+
+    /** payload=成功响应原始体（Q3：THREAD_POST 成功定位解析新帖 tid 用；默认 null 语义不变） */
+    data class Confirmed(val payload: String? = null) : MutationState
     data class Rejected(val reason: String) : MutationState
 
     /** 超时/断网：结果未知——禁止自动重发，需人工核对 */

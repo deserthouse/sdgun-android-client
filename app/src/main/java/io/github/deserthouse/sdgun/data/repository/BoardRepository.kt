@@ -111,12 +111,19 @@ object BoardRepository {
         }
     }
 
-    suspend fun fetchMyCircles(): List<Board> = withContext(Dispatchers.IO) {
+    suspend fun fetchMyCircles(token: String? = null): List<Board> = withContext(Dispatchers.IO) {
         try {
             val conn = URL(MY_CIRCLES_URL).openConnection() as HttpURLConnection
             conn.connectTimeout = 12000
             conn.readTimeout = 15000
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 16; Pixel 8)")
+            // A1-7（AF29-09）：我的板块需账号身份——token 在场走 MAGAPPX UA（第 8 段），
+            // 游客保持普通 UA（服务端按身份返回；换号重取由调用方 LaunchedEffect(token) 承担）
+            conn.setRequestProperty(
+                "User-Agent",
+                if (!token.isNullOrBlank())
+                    "Mozilla/5.0 (Linux; Android 16; Pixel 8) MAGAPPX|6.4.0-2.90-30042|Android 16 google Pixel 8|shuidan|koPx4DY3tw7hrg5nKpSmc3|88af41c4c24832860d97d44e436f8842|174e1e66702c31aa7e949f5ab30db60b|$token"
+                else "Mozilla/5.0 (Linux; Android 16; Pixel 8)",
+            )
             try {
                 parseMyCircles(conn.inputStream.bufferedReader().readText())
             } finally {

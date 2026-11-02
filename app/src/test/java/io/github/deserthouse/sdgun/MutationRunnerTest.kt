@@ -27,8 +27,8 @@ class MutationRunnerTest {
         val final = MutationRunner.submit(req(), FakeMutationGateway("confirm"), 7, { true }) {
             seen.add(it)
         }
-        assertEquals(MutationState.Confirmed, final)
-        assertEquals(listOf(MutationState.Submitting, MutationState.Confirmed), seen)
+        assertTrue(final is MutationState.Confirmed)
+        assertEquals(listOf<MutationState>(MutationState.Submitting, MutationState.Confirmed()), seen)
     }
 
     @Test

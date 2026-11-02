@@ -16,3 +16,24 @@ data class WriteUi(
     val phase: WriteUiPhase = WriteUiPhase.Idle,
     val reason: String? = null,
 )
+
+/**
+ * Q2 toggle 意图决策（纯函数，JVM 可测）：当前相位 + 乐观归属 → 下一次点按应发什么。
+ *
+ * - Pending 在途一律 NONE（S03 禁重复）；
+ * - Verify 未核对 → NONE（路由层弹核对对话框）；Verify 已核对 → 按当前归属重发
+ *   （已赞=重发取消、未赞=重发 Add——核对消费后允许一次重试）；
+ * - 其余按归属分流：已赞 → CANCEL（Q2 toggle 后半），未赞 → ADD。
+ *   Failed 后的语义自然成立：Add 失败已回滚归属（再点=重发 Add），
+ *   Cancel 失败保持归属（再点=重发 Cancel）。
+ */
+object WriteOps {
+    enum class Op { ADD, CANCEL, NONE }
+
+    fun decideApplaud(phase: WriteUiPhase, applauded: Boolean, verifyAcked: Boolean): Op = when {
+        phase == WriteUiPhase.Pending -> Op.NONE
+        phase == WriteUiPhase.Verify && !verifyAcked -> Op.NONE
+        applauded -> Op.CANCEL
+        else -> Op.ADD
+    }
+}

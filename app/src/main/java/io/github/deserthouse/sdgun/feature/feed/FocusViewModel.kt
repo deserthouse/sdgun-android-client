@@ -75,10 +75,12 @@ class FocusViewModel(
         loading.getValue(channel)!!.get()
 
     fun loadMore(channel: FocusChannel) {
+        // R0-2（A31-S01）：Stale（分页失败保旧）允许重试下一页
         val st = channelStates.getValue(channel).value
-        if (st !is UiState.Data<*>) return
+        if (st !is UiState.Data<*> && st !is UiState.Stale<*>) return
         @Suppress("UNCHECKED_CAST")
-        val oldList = st.value as List<io.github.deserthouse.sdgun.data.repository.NewsItem>
+        val oldList = (if (st is UiState.Data<*>) st.value else (st as UiState.Stale<*>).stale)
+            as List<io.github.deserthouse.sdgun.data.repository.NewsItem>
         if (loading.getValue(channel)!!.get()) return
         val page = nextPage.getValue(channel)!!.get()
         if (page > MAX_PAGES) return
@@ -110,6 +112,11 @@ class FocusViewModel(
     }
 
     companion object {
+        /**
+         * A1-11：聚焦频道流客户端显式页数上限（服务端 step 行为与官方上限契约
+         * 未核对前的保守护栏；频道表亦为固定表[cat_id 1~5 已探针实测]——
+         * 服务端配置驱动改造=待 find_index 类配置契约实采后再议）。
+         */
         private const val MAX_PAGES = 10
     }
 }

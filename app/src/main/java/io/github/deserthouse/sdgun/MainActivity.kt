@@ -41,6 +41,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
@@ -54,12 +55,14 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.toArgb
@@ -77,6 +80,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
 import androidx.navigation.compose.NavHost
@@ -172,14 +176,20 @@ class MainActivity : ComponentActivity() {
     /** 处理论坛链接唤起；返回是否消费了 URL */
     private fun handleViewIntent(intent: android.content.Intent): Boolean {
         val uri = intent.data ?: return false
-        // A29：站方 scheme（shuidan://forumThreadList?fid=&circleId=）→ 原生板块页；
-        // 未知 shuidan host 一律消费（不让死链接落到浏览器）
+        // Q1（A1-8）：shuidan:// typed Target——forumThreadList/forumThread/user 三形态原生直达；
+        // 未知 shuidan host=可恢复回退（回聚焦 tab），不吞死链也不外漏浏览器
         if (uri.scheme == "shuidan") {
-            val fid = uri.getQueryParameter("fid")?.toLongOrNull()
-            if (fid != null && fid > 0L) {
-                state.pendingNativeRoute = "board/$fid"
-                state.nativeRouteTick++
+            when (val t = io.github.deserthouse.sdgun.core.navigation.TargetParser.parse(uri.toString())) {
+                is io.github.deserthouse.sdgun.core.navigation.Target.Board ->
+                    state.pendingNativeRoute = "board/${t.fid}"
+                is io.github.deserthouse.sdgun.core.navigation.Target.Thread ->
+                    state.pendingNativeRoute =
+                        "thread/${t.tid}/0" + (t.pid?.let { "?pid=$it" } ?: "")
+                is io.github.deserthouse.sdgun.core.navigation.Target.User ->
+                    state.pendingNativeRoute = "user/${t.uid}"
+                else -> state.pendingNativeRoute = "focus"
             }
+            state.nativeRouteTick++
             return true
         }
         val url = uri.toString()
@@ -210,10 +220,9 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
     // A70-02：根目的地=四 tab 本身（聚焦/社区/消息/我的），全局选中由 route 单源推导；
     // 网页 URL 只描述兼容 WebView 页内部状态，不再反推 tab。
     // launchSingleTop=重选当前 tab 不重复入栈（不重载）；saveState/restoreState 保各 tab 状态
-    // R4：搜索入口——落兼容壳搜索页（WebView 已载 site search；mag1 无帖子搜索 API）
-    fun openCompatSearch() {
-        webView.loadUrl(UrlRules.normalizeInternal("https://bbs.sdgun.com.cn/search.php?mod=forum&mobile=2"))
-        navController.navigate("home") { launchSingleTop = true }
+    // Q5（A1-10）：搜索入口——原生搜索页（圈子+用户双通道；帖子全文搜索=页内 H5 桥接）
+    fun openSearch() {
+        navController.navigate("search") { launchSingleTop = true }
     }
 
     fun navigateTab(index: Int) {
@@ -294,11 +303,28 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
     LaunchedEffect(textZoom) { webView.settings.textZoom = textZoom }
 
     // 聚焦/资讯卡链接分流（AR-01 同源）：bbs 域内→兼容 WebView 壳内浏览；域外→系统浏览器
+    // Q1（A4-5/深链统一）：可识别的站方 web 形态（viewthread/forumdisplay/space-uid）升级为
+    // 原生路由（通知行/正文链接块/媒体外开共用此入口）；其余仍走 WebView 壳
     fun openLink(url: String) {
+        val t = io.github.deserthouse.sdgun.core.navigation.TargetParser.parse(url)
+        if (t is io.github.deserthouse.sdgun.core.navigation.Target.Board) {
+            navController.navigate("board/${t.fid}") { launchSingleTop = true }; return
+        }
+        if (t is io.github.deserthouse.sdgun.core.navigation.Target.Thread) {
+            navController.navigate("thread/${t.tid}/0" + (t.pid?.let { "?pid=$it" } ?: "")) {
+                launchSingleTop = true
+            }
+            return
+        }
+        if (t is io.github.deserthouse.sdgun.core.navigation.Target.User) {
+            navController.navigate("user/${t.uid}") { launchSingleTop = true }; return
+        }
+        // Web/null：站内→兼容壳；域外→系统浏览器
         when (UrlRules.classify(url)) {
             is UrlRules.Verdict.Internal -> {
                 webView.loadUrl(UrlRules.normalizeInternal(url))
                 navController.navigate("home") { launchSingleTop = true }
+                state.deepLinkTick++
             }
             else -> runCatching {
                 appContext.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
@@ -306,7 +332,33 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
         }
     }
 
+    /** A1-3：附件下载（系统 DownloadManager；带 WebView Cookie 供站方附件鉴权） */
+    fun downloadAttachment(url: String, name: String) {
+        runCatching {
+            val req = android.app.DownloadManager.Request(Uri.parse(url)).apply {
+                setTitle(name.ifBlank { "附件" })
+                setDescription("SDGun 附件下载")
+                setNotificationVisibility(
+                    android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                android.webkit.CookieManager.getInstance().getCookie(url)?.let {
+                    addRequestHeader("Cookie", it)
+                }
+                setDestinationInExternalPublicDir(
+                    android.os.Environment.DIRECTORY_DOWNLOADS,
+                    name.ifBlank { "attachment_${System.currentTimeMillis()}" },
+                )
+            }
+            (appContext.getSystemService(android.content.Context.DOWNLOAD_SERVICE)
+                as android.app.DownloadManager).enqueue(req)
+        }
+    }
+
     // A70-01：新原生页全部接入真实导航；"home"（WebView 兼容壳）保留为设置分支/深链落点
+    // Q2：写网关上提到 NavHost 级——thread/收藏/用户/会话四处写面共用同一 fake 门控
+    val mutFakeMode by prefs.mutationFake.collectAsState()
+    val mutGateway: MutationGateway =
+        if (BuildConfig.DEBUG && mutFakeMode != "off") FakeMutationGateway(mutFakeMode)
+        else HttpMutationGateway()
     NavHost(navController = navController, startDestination = "focus") {
         // ── 一级 tab 0：聚焦（G2-A02 原生资讯流，频道条+内容卡）──
         composable("focus") {
@@ -314,7 +366,7 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
             val vm = remember { FocusViewModel(FocusRepository(), scope) }
             var channel by remember { mutableStateOf(FocusChannel.LATEST) }
             LaunchedEffect(Unit) { vm.select(channel) }
-            TabShell(activeIdx = 0, onTab = { navigateTab(it) }, onSearch = { openCompatSearch() }) {
+            TabShell(activeIdx = 0, onTab = { navigateTab(it) }, onSearch = { openSearch() }) {
                 val nfs by prefs.nativeFontScale.collectAsState()
                 io.github.deserthouse.sdgun.core.designsystem.ReadingTheme(nfs) {
                 FocusPage(
@@ -339,7 +391,9 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                 mutableStateOf<UiState<List<BoardRepository.Group>>>(UiState.InitialLoading)
             }
             var myBoards by remember { mutableStateOf<List<BoardRepository.Board>>(emptyList()) }
-            LaunchedEffect(Unit) {
+            val myToken by prefs.apiToken.collectAsState()
+            LaunchedEffect(myToken) {
+                // A1-7：token 进 key——换号/登出重取我的板块（归属随会话变）
                 // 实测游客 circleTree 返回完整 5 组树：空返回不可能是成功态，按失败呈现
                 val tree = BoardRepository.fetchTree()
                 treeState = if (tree.isEmpty()) {
@@ -347,9 +401,10 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                 } else {
                     UiState.Data(tree)
                 }
-                myBoards = BoardRepository.fetchMyCircles()
+                myBoards = BoardRepository.fetchMyCircles(myToken.ifBlank { null })
             }
-            TabShell(activeIdx = 1, onTab = { navigateTab(it) }, onSearch = { openCompatSearch() }) {
+            TabShell(activeIdx = 1, onTab = { navigateTab(it) }, onSearch = { openSearch() },
+                title = "社区") {
                 CommunityPage(
                     state = treeState,
                     myBoards = myBoards,
@@ -373,6 +428,8 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
             } else {
                 // ── U3-c 发帖（F14 前半）：表单+MutationRunner 五态（假服务三分支走查）──
                 val postToken by prefs.apiToken.collectAsState()
+                val mutUserId by prefs.apiUserId.collectAsState()
+                val mutContext = LocalContext.current
                 val postFake by prefs.mutationFake.collectAsState()
                 val postGateway: MutationGateway =
                     if (BuildConfig.DEBUG && postFake != "off") FakeMutationGateway(postFake)
@@ -385,15 +442,39 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                 val uploadTasks = remember(fid) {
                     mutableStateListOf<io.github.deserthouse.sdgun.feature.thread.UploadTaskItem>()
                 }
+                // Q3：column-info（circle_id 服务端换取[fid≠circle_id]+分类 types；
+                // 面板打开且已登录时拉取，失败可重试——circleIdReady 门禁发布）
+                var colInfoState by remember(fid) {
+                    mutableStateOf<UiState<io.github.deserthouse.sdgun.data.repository
+                        .ThreadRepository.PostColumnInfo>>(UiState.InitialLoading)
+                }
+                var colInfoRetry by remember(fid) { mutableIntStateOf(0) }
+                LaunchedEffect(postOpen, postToken, colInfoRetry) {
+                    if (!postOpen) return@LaunchedEffect
+                    if (postToken.isBlank()) { colInfoState = UiState.AuthRequired; return@LaunchedEffect }
+                    colInfoState = UiState.InitialLoading
+                    val info = io.github.deserthouse.sdgun.data.repository.ThreadRepository
+                        .fetchPostColumnInfo(postToken, fid)
+                    colInfoState = if (info == null) {
+                        UiState.RetryableError("板块参数获取失败（发帖需要服务端下发参数）")
+                    } else UiState.Data(info)
+                }
+                // Q3：真实上传传输（登录态=uploadPicNew multipart；游客=诚实不可用）
+                val uploadTransport: io.github.deserthouse.sdgun.feature.thread.UploadTransport =
+                    if (postToken.isNotBlank()) {
+                        io.github.deserthouse.sdgun.feature.thread.HttpUploadTransport(
+                            mutContext, postToken)
+                    } else io.github.deserthouse.sdgun.feature.thread.HonestUnavailableUpload
                 val pickImages = androidx.activity.compose.rememberLauncherForActivityResult(
                     androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia(4),
                 ) { uris ->
-                    uris.forEachIndexed { i, u ->
+                    uris.forEach { u ->
                         uploadTasks.add(
                             io.github.deserthouse.sdgun.feature.thread.UploadTaskItem(
-                                id = (fid % 1000).toInt() * 100 + i,
-                                name = u.lastPathSegment ?: "image_$i",
+                                uuid = java.util.UUID.randomUUID().toString(),
+                                name = u.lastPathSegment ?: "image",
                                 state = io.github.deserthouse.sdgun.feature.thread.UploadState.WAITING,
+                                uri = u.toString(),
                             ))
                     }
                 }
@@ -410,31 +491,56 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                     currentOrder = bvm.order,
                     currentTypeId = bvm.typeId,
                     onFilterChange = { o, t -> bvm.setFilter(fid, o, t) },
+                    onRefresh = { bvm.refresh(fid) },
+                    isLoadingMore = bvm.paging,
                     onPostThread = {
                         postState = MutationState.Draft
                         postOpen = true
                     },
                 )
                 if (postOpen) {
+                    val draftOwner = io.github.deserthouse.sdgun.data.repository.DraftStore
+                        .ownerOf(mutUserId)
                     io.github.deserthouse.sdgun.feature.thread.ThreadPostSheet(
                         boardName = bvm.meta?.name ?: fallbackName,
                         authed = postToken.isNotBlank(),
                         submitting = postState is MutationState.Submitting,
                         mutationState = postState,
+                        initialTitle = io.github.deserthouse.sdgun.data.repository.DraftStore
+                            .loadPost(mutContext, draftOwner, fid).first,
+                        initialContent = io.github.deserthouse.sdgun.data.repository.DraftStore
+                            .loadPost(mutContext, draftOwner, fid).second,
+                        onDraftChange = { t, c ->
+                            io.github.deserthouse.sdgun.data.repository.DraftStore
+                                .savePost(mutContext, draftOwner, fid, t, c)
+                        },
                         onDismiss = { postOpen = false },
-                        onSubmit = { title, content ->
+                        onSubmit = { title, content, typeId ->
+                            // R2/A3-3：UPLOADED 附件序列化进正文（未上传被 sheet 阻断，此处防御同规）
+                            val finalContent = io.github.deserthouse.sdgun.feature.thread.UploadQueueLogic
+                                .serializeUploadedInto(content, uploadTasks.toList())
+                            // Q3：circle_id 必须经 column-info 服务端换取（fid≠circle_id，jadx 实锤）；
+                            // 装机取证修正：debug 假服务模式下走全合成（fid 直代 circle_id）——
+                            // 否则假模式被真 column-info 门堵死，写状态机走查不可达（av12 实证）
+                            val fakeActive = BuildConfig.DEBUG && postFake != "off"
+                            val colInfo = (colInfoState as? UiState.Data<*>)?.value
+                                as? io.github.deserthouse.sdgun.data.repository.ThreadRepository.PostColumnInfo
                             val form = io.github.deserthouse.sdgun.feature.thread.ThreadPostForm(
-                                title = title, content = content,
-                                fid = fid, circleId = fid,
+                                title = title, content = finalContent,
+                                fid = fid,
+                                circleId = colInfo?.circleId ?: if (fakeActive) fid else 0L,
+                                typeId = typeId,
                             )
                             val token = postToken
-                            if (token.isBlank()) {
-                                postState = MutationState.Rejected("请先登录")
-                            } else {
-                                postScope.launch {
+                            when {
+                                token.isBlank() -> postState = MutationState.Rejected("请先登录")
+                                // fake 模式旁路（与按钮门同口径）：全合成语义不查真 column-info
+                                colInfo == null && !fakeActive -> postState =
+                                    MutationState.Rejected("板块参数未就绪，请重试获取")
+                                else -> postScope.launch {
                                     val epoch = io.github.deserthouse.sdgun.core.session
                                         .SessionManager.store.epoch.value
-                                    postState = io.github.deserthouse.sdgun.core.mutation
+                                    val st = io.github.deserthouse.sdgun.core.mutation
                                         .MutationRunner.submit(
                                             MutationRequest(
                                                 kind = MutationKind.THREAD_POST,
@@ -445,6 +551,20 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                                             { captured -> io.github.deserthouse.sdgun.core.session
                                                 .SessionManager.store.epoch.isCurrent(captured) },
                                         )
+                                    postState = st
+                                    if (st is MutationState.Confirmed) {
+                                        // Q3 成功定位：清稿+关面板+刷新板块+（响应含 tid 时）直达新帖
+                                        io.github.deserthouse.sdgun.data.repository.DraftStore
+                                            .clearPost(mutContext, draftOwner, fid)
+                                        uploadTasks.clear()
+                                        postOpen = false
+                                        bvm.refresh(fid)
+                                        val newTid = io.github.deserthouse.sdgun.data.repository
+                                            .ThreadRepository.parseThreadAddTid(st.payload)
+                                        if (newTid != null && newTid > 0) {
+                                            navController.navigate("thread/$newTid/$fid")
+                                        }
+                                    }
                                 }
                             }
                         },
@@ -457,34 +577,53 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                         onRetryUpload = { t ->
                             postScope.launch {
                                 io.github.deserthouse.sdgun.feature.thread.UploadQueueLogic.runTask(
-                                    t, io.github.deserthouse.sdgun.feature.thread
-                                        .HonestUnavailableUpload,
+                                    t, uploadTransport,
                                 ) { upd ->
-                                    val idx = uploadTasks.indexOfFirst { it.id == upd.id }
+                                    val idx = uploadTasks.indexOfFirst { it.uuid == upd.uuid }
                                     if (idx >= 0) uploadTasks[idx] = upd
                                 }
                             }
                         },
-                        onRemoveUpload = { t -> uploadTasks.removeAll { it.id == t.id } },
+                        onRemoveUpload = { t -> uploadTasks.removeAll { it.uuid == t.uuid } },
                         uploadTasks = uploadTasks.toList(),
+                        // Q3：分类 chips + circle_id 就绪门 + column-info 失败重试
+                        postTypes = (colInfoState as? UiState.Data<*>)?.let {
+                            (it.value as? io.github.deserthouse.sdgun.data.repository
+                                .ThreadRepository.PostColumnInfo)?.types
+                        } ?: emptyList(),
+                        circleIdReady = colInfoState is UiState.Data<*> ||
+                            (BuildConfig.DEBUG && postFake != "off"),
+                        // 假模式下不显真 column-info 错误（全合成语义）
+                        columnInfoError = if (BuildConfig.DEBUG && postFake != "off") null
+                        else (colInfoState as? UiState.RetryableError)?.error,
+                        onRetryColumnInfo = { colInfoRetry++ },
                     )
                 }
             }
         }
-        // ── 二级：帖子（G2-A05）——主楼+楼层流，返回钮回板块 ──
-        composable("thread/{tid}/{fid}") { entry ->
+        // ── 二级：帖子（G2-A05）——主楼+楼层流，返回钮回板块；Q1：可选 pid=楼层定位深链 ──
+        composable("thread/{tid}/{fid}?pid={pid}") { entry ->
             val tid = entry.arguments?.getString("tid")?.toLongOrNull() ?: 0L
             val fid = entry.arguments?.getString("fid")?.toLongOrNull() ?: 0L
+            val deepPid = entry.arguments?.getString("pid")?.toLongOrNull()?.takeIf { it > 0 }
+            var deepPidConsumed by remember(tid) { mutableStateOf(deepPid == null) }
             val scope = rememberCoroutineScope()
             // ── G4 写操作（真实写入验收=用户 MANUAL；AVD 走查用 debug 假服务，零触网）──
+            // Q2：网关上提 NavHost 级（mutGateway）——thread/收藏/用户/会话四处共用
             val mutContext = LocalContext.current
             val mutToken by prefs.apiToken.collectAsState()
-            val fakeMode by prefs.mutationFake.collectAsState()
-            val gateway: MutationGateway =
-                if (BuildConfig.DEBUG && fakeMode != "off") FakeMutationGateway(fakeMode)
-                else HttpMutationGateway()
             var replyOpen by remember(tid) { mutableStateOf(false) }
             var replyState by remember(tid) { mutableStateOf<MutationState>(MutationState.Draft) }
+            // A1-5（AF29-03）：回复目标——null=根回复；被引楼层 pid=quote 回复
+            // （草稿键 owner+tid+replyPid 已在 DraftStore 支持，此前 UI 只用 root）
+            var replyTargetPid by remember(tid) { mutableStateOf<Long?>(null) }
+            fun openReply(targetPid: Long?) {
+                if (mutToken.isBlank()) { navigateTab(3) } else {
+                    replyTargetPid = targetPid
+                    replyState = MutationState.Draft  // 审查修复：打开即重置（旧目标失败态不得串入新表单）
+                    replyOpen = true
+                }
+            }
             // A24-02：WriteUi 相位模型（Pending 保留乐观态 / Verify 禁直发需核对）
             val applaudStates = remember(tid) { mutableStateMapOf<Long, WriteUi>() }
             val applaudedIds = remember(tid) { mutableStateOf(setOf<Long>()) }
@@ -503,7 +642,7 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                 val cap = io.github.deserthouse.sdgun.core.session.SessionManager.store.epoch.value
                 scope.launch {
                     MutationRunner.submit(
-                        MutationRequest(kind, params, t), gateway, cap,
+                        MutationRequest(kind, params, t), mutGateway, cap,
                         { captured -> io.github.deserthouse.sdgun.core.session.SessionManager.store.epoch.isCurrent(captured) },
                     ) { st -> onState(st) }
                 }
@@ -516,38 +655,70 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
             fun doApplaud(pid: Long) {
                 if (mutToken.isBlank()) { navigateTab(3); return }
                 val ui = applaudStates[pid]
-                // 在途禁重复；Verify 未核对→弹核对对话框（A24-02：禁直发重试）
-                if (ui?.phase == WriteUiPhase.Pending) return
-                if (ui?.phase == WriteUiPhase.Verify && pid !in verifyAcked.value) {
-                    verifyDialogFor = pid
-                    return
-                }
-                applaudedIds.value = applaudedIds.value + pid  // 乐观 +1（Pending 保留）
-                applaudStates[pid] = WriteUi(WriteUiPhase.Pending)
-                submitMutation(MutationKind.APPLAUD, mapOf("content_id" to "$pid")) { st ->
-                    when (st) {
-                        is MutationState.Confirmed ->
-                            applaudStates[pid] = WriteUi(WriteUiPhase.Done)
-                        is MutationState.Rejected -> {
-                            applaudStates[pid] = WriteUi(WriteUiPhase.Failed, st.reason)
-                            applaudedIds.value = applaudedIds.value - pid  // 回滚
+                // R0-1（A31-S03）：在途禁重复；Verify 未核对→核对对话框（A24-02 禁直发重试）
+                // Q2：决策收敛到 WriteOps.decideApplaud（toggle：已赞再点=取消赞， Done 不再是终态）
+                val acked = pid in verifyAcked.value
+                when (io.github.deserthouse.sdgun.core.model.WriteOps
+                    .decideApplaud(ui?.phase ?: WriteUiPhase.Idle, pid in applaudedIds.value, acked)) {
+                    io.github.deserthouse.sdgun.core.model.WriteOps.Op.NONE -> {
+                        if (ui?.phase == WriteUiPhase.Verify) verifyDialogFor = pid
+                        return
+                    }
+                    io.github.deserthouse.sdgun.core.model.WriteOps.Op.ADD -> {
+                        // 核对后重发=消费该次核对（再 Unknown 须再核对，不得一点即连环重发）
+                        verifyAcked.value = verifyAcked.value - pid
+                        applaudedIds.value = applaudedIds.value + pid  // 乐观 +1（Pending 保留）
+                        applaudStates[pid] = WriteUi(WriteUiPhase.Pending)
+                        submitMutation(MutationKind.APPLAUD, mapOf("content_id" to "$pid")) { st ->
+                            when (st) {
+                                is MutationState.Confirmed ->
+                                    applaudStates[pid] = WriteUi(WriteUiPhase.Done)
+                                is MutationState.Rejected -> {
+                                    applaudStates[pid] = WriteUi(WriteUiPhase.Failed, st.reason)
+                                    applaudedIds.value = applaudedIds.value - pid  // 回滚
+                                }
+                                is MutationState.OutcomeUnknown -> {
+                                    // 结果未知：回滚乐观显示 + Verify（核对后经对话框才可重发）
+                                    applaudStates[pid] = WriteUi(WriteUiPhase.Verify)
+                                    applaudedIds.value = applaudedIds.value - pid
+                                }
+                                else -> {}
+                            }
                         }
-                        is MutationState.OutcomeUnknown -> {
-                            // 结果未知：回滚乐观显示 + Verify（核对后经对话框才可重发）
-                            applaudStates[pid] = WriteUi(WriteUiPhase.Verify)
-                            applaudedIds.value = applaudedIds.value - pid
+                    }
+                    io.github.deserthouse.sdgun.core.model.WriteOps.Op.CANCEL -> {
+                        // Q2 取消赞（jadx FroumDataView.addApplaud toggle 后半）：失败/未知
+                        // **不回滚归属**——取消失败=仍视为已赞，与 Add 失败的回滚方向相反
+                        verifyAcked.value = verifyAcked.value - pid
+                        applaudStates[pid] = WriteUi(WriteUiPhase.Pending)
+                        submitMutation(MutationKind.APPLAUD_CANCEL, mapOf("content_id" to "$pid")) { st ->
+                            when (st) {
+                                is MutationState.Confirmed -> {
+                                    applaudedIds.value = applaudedIds.value - pid
+                                    applaudStates[pid] = WriteUi(WriteUiPhase.Idle)
+                                }
+                                is MutationState.Rejected ->
+                                    applaudStates[pid] = WriteUi(WriteUiPhase.Failed, st.reason)
+                                is MutationState.OutcomeUnknown ->
+                                    applaudStates[pid] = WriteUi(WriteUiPhase.Verify)
+                                else -> {}
+                            }
                         }
-                        else -> {}
                     }
                 }
             }
 
+            // R0-1（A31-S03）：收藏 Unknown 的显式核对对话框（旧实现点一下=自动当核对完成并重发）
+            var collectVerifyDialog by remember(tid) { mutableStateOf(false) }
             fun doCollect() {
                 if (mutToken.isBlank()) { navigateTab(3); return }
-                if (collectUi.phase == WriteUiPhase.Pending) return
+                // 在途/已确认禁重复 Add（取消收藏属 A3-6，未实现前 Done=终态）
+                if (collectUi.phase == WriteUiPhase.Pending || collectUi.phase == WriteUiPhase.Done) return
                 if (collectUi.phase == WriteUiPhase.Verify && !collectVerifyAcked) {
-                    collectVerifyAcked = true
+                    collectVerifyDialog = true  // 显式核对动作，不自动 ack、不继续提交
+                    return
                 }
+                collectVerifyAcked = false  // 重发消费核对（再 Unknown 须再核对）
                 val op = (opState as? UiState.Data<ThreadRepository.ThreadOP>)?.value
                 collectUi = WriteUi(WriteUiPhase.Pending)
                 submitMutation(
@@ -575,10 +746,44 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
             }
 
             LaunchedEffect(tid) { if (tid > 0L) tvm.start(tid, fid) }
+            // N1/A2-4：帖打开即记录本地阅读历史（标题随 opState Data 后补记/更新）
+            LaunchedEffect(opState) {
+                val op = (opState as? UiState.Data<*>)?.value as? ThreadRepository.ThreadOP
+                if (op != null && op.tid > 0) {
+                    io.github.deserthouse.sdgun.data.repository.ThreadHistoryStore.record(
+                        mutContext, op.tid, op.title,
+                    )
+                }
+            }
 
             val nfs2 by prefs.nativeFontScale.collectAsState()
             io.github.deserthouse.sdgun.core.designsystem.ReadingTheme(nfs2) {
             ThreadPage(
+                // AF29-04（A1-2）：视频/附件/链接块外开分流（域内→壳内浏览，域外→系统浏览器）
+                onOpenUrl = { url -> openLink(url) },
+                // A1-3：附件块=系统下载器（带 WebView Cookie）
+                onDownloadAttachment = { url, name -> downloadAttachment(url, name) },
+                // R2/F17：举报（jadx ReportComp 同构：type=14 帖子、type_value=base64(json contentId)）
+                onReport = { contentId ->
+                    if (contentId.isNotBlank()) {
+                        val payload = org.json.JSONObject()
+                            .put("contentId", contentId).toString()
+                        val b64 = android.util.Base64.encodeToString(
+                            payload.toByteArray(), android.util.Base64.NO_WRAP)
+                        val url = "https://mag1.sdgun.net/mag/user/v1/User/userReportView" +
+                            "?type=14&type_value=" +
+                            java.net.URLEncoder.encode(b64, "UTF-8")
+                        openLink(url)
+                    }
+                },
+                // A1-9：标准文本分享（系统分享面板）
+                onShare = { text ->
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, text)
+                    }
+                    runCatching { mutContext.startActivity(Intent.createChooser(intent, "分享")) }
+                },
                 opState = opState,
                 floorsState = floorsState,
                 descending = tvm.descending,
@@ -602,22 +807,60 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                 isCollected = collected,
                 collectState = collectUi,
                 onCollect = { doCollect() },
-                onReply = {
-                    if (mutToken.isBlank()) { navigateTab(3) } else { replyOpen = true }
-                },
+                onReply = { openReply(null) },
+onReplyToQuote = { pid -> openReply(pid) },
+                // Q1：定位/跳楼统一走 VM（引用点击=pid 定位[已加载即时/未加载跨页扫描]；
+                // 深链 pid 经 route ?pid= 同通路；楼层号输入=楼层号匹配）
+                onLocateQuote = { pid -> tvm.jumpTo(tid, targetPid = pid) },
+                jumpState = tvm.jumpState,
+                onJumpToFloor = { n -> tvm.jumpTo(tid, targetFloor = n) },
+                locateRequest = tvm.pendingLocate,
+                onLocateHandled = { tvm.clearLocate() },
             )
+            // Q1：深链 pid 首次进入——楼层首页到达后触发一次定位
+            LaunchedEffect(opState, floorsState) {
+                if (!deepPidConsumed && deepPid != null && floorsState is UiState.Data<*>) {
+                    deepPidConsumed = true
+                    tvm.jumpTo(tid, targetPid = deepPid)
+                }
+            }
+            if (collectVerifyDialog) {
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { collectVerifyDialog = false },
+                    title = { Text("结果待确认") },
+                    text = {
+                        Text("上次收藏请求超时，结果未知。请先到收藏列表核对是否已收藏，确认未收藏后才重发。")
+                    },
+                    confirmButton = {
+                        androidx.compose.material3.TextButton(onClick = {
+                            collectVerifyDialog = false
+                            collectVerifyAcked = true
+                            doCollect()
+                        }) { Text("已核对，重发") }
+                    },
+                    dismissButton = {
+                        androidx.compose.material3.TextButton(onClick = {
+                            collectVerifyDialog = false
+                        }) { Text("取消") }
+                    },
+                )
+            }
             if (replyOpen) {
+                val target = replyTargetPid
+                // A1-5：草稿按实际目标（root vs 被引 pid 各自独立）
                 ReplySheet(
-                    initialDraft = DraftStore.load(mutContext, draftOwner, tid),
+                    replyKey = target,
+                    initialDraft = DraftStore.load(mutContext, draftOwner, tid, target),
+                    targetLabel = if (target != null) "引用楼层 #$target" else null,
                     state = replyState,
-                    onDraftChange = { DraftStore.save(mutContext, draftOwner, tid, it) },
+                    onDraftChange = { DraftStore.save(mutContext, draftOwner, tid, it, target) },
                     onSend = { text ->
                         // auth=同盾参数（静态编目不可复刻，空值提交；真实验收=用户 MANUAL）
                         submitMutation(
                             MutationKind.REPLY,
                             mapOf(
                                 "tid" to "$tid",
-                                "reply_id" to "",
+                                "reply_id" to (target?.toString() ?: ""),
                                 "circle_id" to "",
                                 "content" to text,
                                 "video" to "",
@@ -627,7 +870,7 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                         ) { st ->
                             replyState = st
                             if (st is MutationState.Confirmed) {
-                                DraftStore.clear(mutContext, draftOwner, tid)
+                                DraftStore.clear(mutContext, draftOwner, tid, target)
                                 replyOpen = false
                                 tvm.retryFloors(tid)  // 回复成功刷新楼层（当前筛选代际）
                             }
@@ -641,7 +884,8 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
         // ── 一级 tab 2：消息（G3）——游客态 tab 内嵌登录面（门禁不跳路由，选中态不漂移）──
         composable("messages") {
             val token by prefs.apiToken.collectAsState()
-            TabShell(activeIdx = 2, onTab = { navigateTab(it) }, onSearch = { openCompatSearch() }) {
+            TabShell(activeIdx = 2, onTab = { navigateTab(it) }, onSearch = { openSearch() },
+                title = "消息") {
                 if (token.isBlank()) {
                     LoginScreen(
                         prefs = prefs,
@@ -649,11 +893,13 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                         onLoggedIn = { /* token 翻转自动切到消息面 */ },
                         onOpenSettings = { navController.navigate("settings") },
                         embedded = true,
+                        onOpenUrl = { url -> navController.navigate(
+                            "h5/${Uri.encode("账号服务")}?url=${Uri.encode(url)}") },
                     )
                 } else {
                     val profileFake by prefs.profileFake.collectAsState()
                     var groups by remember(token) {
-                        mutableStateOf<List<ProfileRepository.MessageGroup>>(emptyList())
+                        mutableStateOf<List<ProfileRepository.MessageGroup>?>(emptyList())
                     }
                     var loading by remember(token) { mutableStateOf(true) }
                     LaunchedEffect(token, profileFake) {
@@ -665,8 +911,14 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                                 ProfileRepository.MessageGroup("g2", "（合成）私信：皮筋交流群", 5),
                             )
                         } else if (profileFake == "empty") emptyList()
-                        else if (profileFake == "error") emptyList()
-                        else ProfileRepository.fetchMessageGroups(token)
+                        else if (profileFake == "error") null
+                        else when (val r = ProfileRepository.fetchMessageGroups(token)) {
+                            // Q4：AuthExpired 与 Failed 均不产出私有数据（组列表 UI 无鉴权态，
+                            // 两者同呈失败/空——内容面绝不串入）
+                            is ProfileRepository.PrivateResult.Ok -> r.value
+                            ProfileRepository.PrivateResult.AuthExpired -> null
+                            ProfileRepository.PrivateResult.Failed -> null
+                        }
                         loading = false
                     }
                     MessagesPage(
@@ -674,7 +926,7 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                         isLoading = loading,
                         onOpenGroup = { g ->
                             navController.navigate(
-                                "messages/conversation/${g.id}?name=${Uri.encode(g.name)}")
+                                "messages/conversation/${g.id}?name=${Uri.encode(g.name)}&uid=${g.uid}")
                         },
                         onOpenNotifications = { navController.navigate("notifications") },
                         modifier = Modifier.fillMaxSize(),
@@ -686,7 +938,13 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
         composable("profile") {
             val token by prefs.apiToken.collectAsState()
             val userId by prefs.apiUserId.collectAsState()
-            TabShell(activeIdx = 3, onTab = { navigateTab(it) }, onSearch = { openCompatSearch() }) {
+            TabShell(activeIdx = 3, onTab = { navigateTab(it) }, onSearch = { openSearch() },
+                title = "我的",
+                actions = {
+                    IconButton(onClick = { navController.navigate("settings") }) {
+                        Icon(Icons.Outlined.Settings, contentDescription = "设置")
+                    }
+                }) {
                 if (token.isBlank()) {
                     LoginScreen(
                         prefs = prefs,
@@ -694,6 +952,8 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                         onLoggedIn = { /* token 翻转自动切到个人面 */ },
                         onOpenSettings = { navController.navigate("settings") },
                         embedded = true,
+                        onOpenUrl = { url -> navController.navigate(
+                            "h5/${Uri.encode("账号服务")}?url=${Uri.encode(url)}") },
                     )
                 } else {
                     val profileFake by prefs.profileFake.collectAsState()
@@ -711,19 +971,19 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                                 hasPhone = false, isVip = 0,
                             ))
                         } else {
-                            val p = ProfileRepository.fetchMyInfo(token, userId)
-                            if (p == null) {
-                                UiState.RetryableError("个人资料拉取失败，请退出后重新登录")
-                            } else {
-                                UiState.Data(p)
+                            when (val r = ProfileRepository.fetchMyInfo(token, userId)) {
+                                // Q4：token 失效→AuthRequired 引导重登（不冒充可重试）
+                                is ProfileRepository.PrivateResult.Ok -> UiState.Data(r.value)
+                                ProfileRepository.PrivateResult.AuthExpired -> UiState.AuthRequired
+                                ProfileRepository.PrivateResult.Failed ->
+                                    UiState.RetryableError("个人资料拉取失败，请退出后重新登录")
                             }
                         }
                     }
                     ProfilePage(
                         state = pState,
                         onBack = {},
-                        onOpenSettings = { navController.navigate("settings") },
-                        onLogout = {
+                                                onLogout = {
                             io.github.deserthouse.sdgun.core.session.SessionManager.store.onLogout()
                         },
                         onOpenPeople = { kind ->
@@ -731,6 +991,12 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                         },
                         onOpenCollect = { navController.navigate("profile/collect") },
                         onOpenServices = { navController.navigate("services") },
+                        onOpenLocalHistory = { navController.navigate("profile/local_history") },
+                        // A5-2：手动网页会话同步（桥 URL 一次性，WebView 加载即完成 Cookie 写入）
+                        webSessionUrl = (pState as? UiState.Data<*>)?.let {
+                            (it.value as? ProfileRepository.UserProfile)?.webSessionUrl
+                        },
+                        onOpenWebSession = { url -> openLink(url) },
                     )
                 }
             }
@@ -757,14 +1023,17 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                                 ProfileRepository.fetchViewUsers(t)
                             io.github.deserthouse.sdgun.feature.profile.PeopleKind.FOLLOWS ->
                                 ProfileRepository.fetchFollows(t)
-                        }
+                        }  // Q4：PrivateResult 直传，peopleLoader 内分型
                     }
                 }
                 var peopleState by remember(kind, token, profileFake) {
                     mutableStateOf<UiState<io.github.deserthouse.sdgun.feature.profile.PeoplePageData>>(
                         UiState.InitialLoading)
                 }
-                LaunchedEffect(kind, token, profileFake) {
+                // A28-01：retry 必须重启加载 effect——只赋 InitialLoading 时
+                // LaunchedEffect(key 不变)不会重跑，页面永久转圈（AF29 复审实锤）
+                var peopleRetry by remember(kind) { mutableIntStateOf(0) }
+                LaunchedEffect(kind, token, profileFake, peopleRetry) {
                     peopleState = UiState.InitialLoading
                     peopleState = loader()
                 }
@@ -772,9 +1041,14 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                     title = kind.title,
                     state = peopleState,
                     onBack = { navController.popBackStack() },
-                    onRetry = { peopleState = UiState.InitialLoading },
+                    onRetry = { peopleRetry++ },
                     listContent = {
-                        io.github.deserthouse.sdgun.feature.profile.PeopleListBody(it)
+                        io.github.deserthouse.sdgun.feature.profile.PeopleListBody(
+                            it,
+                            onOpenUser = { uid ->
+                                if (uid > 0) navController.navigate("user/$uid")
+                            },
+                        )
                     },
                 )
             }
@@ -782,37 +1056,202 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
         composable("profile/collect") {
             val token by prefs.apiToken.collectAsState()
             val profileFake by prefs.profileFake.collectAsState()
+            val collectScope = rememberCoroutineScope()
+            // R1/A2-1：真链累积分页（rows/page 状态持有；S05 口径 null=失败）
             var collectState by remember(token, profileFake) {
                 mutableStateOf<UiState<io.github.deserthouse.sdgun.feature.profile.CollectPageData>>(
                     UiState.InitialLoading)
             }
-            LaunchedEffect(token, profileFake) {
-                collectState = UiState.InitialLoading
-                collectState = io.github.deserthouse.sdgun.feature.profile.collectLoader(
-                    token.ifBlank { null }, profileFake,
-                )()
+            var collectPage by remember(token, profileFake) { mutableIntStateOf(1) }
+            var collectRows = remember(token, profileFake) {
+                mutableStateListOf<io.github.deserthouse.sdgun.feature.profile.CollectItem>()
+            }
+            var collectHasMore by remember(token, profileFake) { mutableStateOf(true) }
+            var collectLoading by remember(token, profileFake) { mutableStateOf(false) }
+            var collectRetry by remember { mutableIntStateOf(0) }
+
+            LaunchedEffect(token, profileFake, collectRetry) {
+                if (profileFake == "data") {
+                    collectState = UiState.Data(io.github.deserthouse.sdgun.feature.profile.CollectPageData(
+                        listOf(
+                            io.github.deserthouse.sdgun.feature.profile.CollectItem(
+                                0, "（合成）原载便携弓制作分享", "收藏于 2026-10-21"),
+                            io.github.deserthouse.sdgun.feature.profile.CollectItem(
+                                0, "（合成）新手入门：皮筋选购指南", "收藏于 2026-10-22"),
+                        )))
+                } else if (profileFake == "empty") {
+                    collectState = UiState.Empty("暂无收藏")
+                } else if (profileFake == "error") {
+                    collectState = UiState.RetryableError("（合成）加载失败，可重试")
+                } else if (token.isBlank()) {
+                    collectState = UiState.AuthRequired
+                } else {
+                    // 真链（userCollectList，GET p 分页；Q4：鉴权失效→AuthRequired 分型）
+                    collectPage = 1; collectRows.clear(); collectHasMore = true
+                    collectLoading = true
+                    val r = ProfileRepository.fetchCollectList(token, 1)
+                    collectLoading = false
+                    collectState = when (r) {
+                        is ProfileRepository.PrivateResult.Ok -> {
+                            val rows = r.value
+                            collectHasMore = rows.isNotEmpty()
+                            collectRows.addAll(rows.map {
+                                io.github.deserthouse.sdgun.feature.profile.CollectItem(
+                                    0, it.title, it.timeText, it.link, it.key)
+                            })
+                            UiState.Data(io.github.deserthouse.sdgun.feature.profile.CollectPageData(
+                                collectRows.toList()))
+                        }
+                        ProfileRepository.PrivateResult.AuthExpired -> UiState.AuthRequired
+                        ProfileRepository.PrivateResult.Failed ->
+                            UiState.RetryableError("收藏加载失败，可重试")
+                    }
+                }
+            }
+            // ── Q2：取消收藏（collectDelete GET id，jadx OperationHelper.collectDelete）──
+            // S03 纪律：破坏性动作先确认对话框；Unknown→Verify 核对后重发；Confirmed 才移行
+            val collectRemoveUi = remember(token, profileFake) {
+                mutableStateMapOf<String, WriteUi>()
+            }
+            var collectRemoveConfirmFor by remember(token, profileFake) {
+                mutableStateOf<io.github.deserthouse.sdgun.feature.profile.CollectItem?>(null)
+            }
+            var collectRemoveVerifyFor by remember(token, profileFake) { mutableStateOf<String?>(null) }
+            fun doCollectRemove(item: io.github.deserthouse.sdgun.feature.profile.CollectItem) {
+                val t = token
+                if (t.isBlank()) return
+                val cap = io.github.deserthouse.sdgun.core.session.SessionManager.store.epoch.value
+                collectRemoveUi[item.recordId] = WriteUi(WriteUiPhase.Pending)
+                collectScope.launch {
+                    val st = MutationRunner.submit(
+                        MutationRequest(
+                            MutationKind.COLLECT_DELETE, mapOf("id" to item.recordId), t,
+                            method = "GET",
+                        ),
+                        mutGateway, cap,
+                        { c -> io.github.deserthouse.sdgun.core.session.SessionManager.store.epoch.isCurrent(c) },
+                    )
+                    when (st) {
+                        is MutationState.Confirmed -> {
+                            collectRemoveUi.remove(item.recordId)
+                            collectRows.removeAll { it.recordId == item.recordId }
+                            collectState = UiState.Data(
+                                io.github.deserthouse.sdgun.feature.profile.CollectPageData(
+                                    collectRows.toList()))
+                        }
+                        is MutationState.Rejected ->
+                            collectRemoveUi[item.recordId] = WriteUi(WriteUiPhase.Failed, st.reason)
+                        is MutationState.OutcomeUnknown -> {
+                            collectRemoveUi[item.recordId] = WriteUi(WriteUiPhase.Verify)
+                            collectRemoveVerifyFor = item.recordId
+                        }
+                        else -> {}
+                    }
+                }
             }
             io.github.deserthouse.sdgun.feature.profile.PeopleScaffold(
                 title = "收藏",
                 state = collectState,
                 onBack = { navController.popBackStack() },
-                onRetry = { collectState = UiState.InitialLoading },
+                onRetry = { collectRetry++ },
                 listContent = {
-                    io.github.deserthouse.sdgun.feature.profile.CollectListBody(it) { tid ->
-                        navController.navigate("thread/$tid/0")
+                    io.github.deserthouse.sdgun.feature.profile.CollectListBody(
+                        it,
+                        onOpenThread = { tid -> navController.navigate("thread/$tid/0") },
+                        onOpenUrl = { url -> openLink(url) },
+                        onRemove = { item -> collectRemoveConfirmFor = item },
+                        removingIds = collectRemoveUi.filterValues { v ->
+                            v.phase == WriteUiPhase.Pending || v.phase == WriteUiPhase.Verify
+                        }.keys,
+                    )
+                    if (profileFake == "off" && collectHasMore && token.isNotBlank()) {
+                        TextButton(
+                            onClick = {
+                                if (collectLoading || !collectHasMore) return@TextButton
+                                collectLoading = true
+                                val next = collectPage + 1
+                                collectScope.launch {
+                                    val r = ProfileRepository.fetchCollectList(token, next)
+                                    collectLoading = false
+                                    when (r) {
+                                        is ProfileRepository.PrivateResult.Ok -> {
+                                            val fetched = r.value
+                                            if (fetched.isNotEmpty()) {
+                                                collectPage = next
+                                                collectRows.addAll(fetched.map {
+                                                    io.github.deserthouse.sdgun.feature.profile.CollectItem(
+                                                        0, it.title, it.timeText, it.link, it.key)
+                                                })
+                                            } else collectHasMore = false
+                                        }
+                                        // Q4：AuthExpired 分页侧同分型（回 AuthRequired）
+                                        ProfileRepository.PrivateResult.AuthExpired ->
+                                            collectState = UiState.AuthRequired
+                                        ProfileRepository.PrivateResult.Failed -> {}
+                                    }
+                                    collectState = UiState.Data(
+                                        io.github.deserthouse.sdgun.feature.profile.CollectPageData(
+                                            collectRows.toList()))
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        ) { Text(if (collectLoading) "加载中…" else "加载更多") }
                     }
                 },
             )
+            // Q2：取消收藏确认（破坏性动作显式核对，不自动执行）
+            collectRemoveConfirmFor?.let { item ->
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { collectRemoveConfirmFor = null },
+                    title = { Text("取消收藏") },
+                    text = { Text("确定取消收藏「${item.title}」？") },
+                    confirmButton = {
+                        androidx.compose.material3.TextButton(onClick = {
+                            collectRemoveConfirmFor = null
+                            doCollectRemove(item)
+                        }) { Text("确定") }
+                    },
+                    dismissButton = {
+                        androidx.compose.material3.TextButton(onClick = {
+                            collectRemoveConfirmFor = null
+                        }) { Text("取消") }
+                    },
+                )
+            }
+            // Q2：取消收藏 Unknown 核对对话框（S03：不自动当核对完成）
+            if (collectRemoveVerifyFor != null) {
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { collectRemoveVerifyFor = null },
+                    title = { Text("结果待确认") },
+                    text = { Text("上次取消收藏请求超时，结果未知。请刷新列表核对后重试。") },
+                    confirmButton = {
+                        androidx.compose.material3.TextButton(onClick = {
+                            val rid = collectRemoveVerifyFor
+                            collectRemoveVerifyFor = null
+                            val item = collectRows.firstOrNull { it.recordId == rid }
+                            if (item != null) doCollectRemove(item)
+                        }) { Text("已核对，重发") }
+                    },
+                    dismissButton = {
+                        androidx.compose.material3.TextButton(onClick = {
+                            collectRemoveVerifyFor = null
+                        }) { Text("取消") }
+                    },
+                )
+            }
         }
         // ── U3-b（F20）：会话详情（合成先行——详情端点参数测绘标注待用）──
-        composable("messages/conversation/{id}?name={name}") { entry ->
+        composable("messages/conversation/{id}?name={name}&uid={uid}") { entry ->
             val name = entry.arguments?.getString("name") ?: "会话"
+            val peerUid = entry.arguments?.getString("uid")?.toLongOrNull() ?: 0L
             val profileFake by prefs.profileFake.collectAsState()
+            val convToken by prefs.apiToken.collectAsState()
             var convState by remember(name, profileFake) {
                 mutableStateOf<UiState<io.github.deserthouse.sdgun.feature.messages.ConversationData>>(
                     UiState.InitialLoading)
             }
-            LaunchedEffect(name, profileFake) {
+            var convRetry by remember { mutableIntStateOf(0) }  // A28-01
+            LaunchedEffect(name, profileFake, convRetry, peerUid, convToken) {
                 convState = if (profileFake == "data") {
                     UiState.Data(io.github.deserthouse.sdgun.feature.messages
                         .syntheticConversation(name))
@@ -820,18 +1259,130 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                     UiState.Empty("暂无消息")
                 } else if (profileFake == "error") {
                     UiState.RetryableError("（合成）加载失败，可重试")
-                } else {
-                    // 真实路径：详情端点待测绘——诚实未接入，不冒充空/失败
+                } else if (peerUid <= 0 || convToken.isBlank()) {
+                    // R3：组行无 uid（合成/旧缓存）→诚实未接入；游客走不到（消息面门禁）
                     UiState.RetryableError("会话详情读取待接口接入")
+                } else {
+                    // R3/A4-2：真链（userMessageList GET uid+p；⚠️ read-may-mutate——
+                    // 新口径不安排真探，生产接线保留供登录态用户自然使用）
+                    // Q2 修正：else 分支须为表达式（此前块内二次赋值使外层 if 值=Unit/Any，
+                    // 编译不过——该结构进入树后从未真正编译过，幻绿窗口实证，见账本 Q2 行）
+                    when (val r = ProfileRepository.fetchMessageList(convToken, peerUid, 1)) {
+                        // Q4：token 失效→AuthRequired（会话内容不串入）
+                        is ProfileRepository.PrivateResult.Ok -> when {
+                            r.value.isEmpty() -> UiState.Empty("暂无消息")
+                            else -> UiState.Data(
+                                io.github.deserthouse.sdgun.feature.messages.ConversationData(
+                                    r.value.map { row ->
+                                        io.github.deserthouse.sdgun.feature.messages.ChatBubble(
+                                            text = row.content,
+                                            time = row.timeText ?: "",
+                                            me = false,  // 方向判定=uid 对比（待真样本收紧）
+                                        )
+                                    }
+                                ))
+                        }
+                        ProfileRepository.PrivateResult.AuthExpired -> UiState.AuthRequired
+                        ProfileRepository.PrivateResult.Failed ->
+                            UiState.RetryableError("会话加载失败，可重试")
+                    }
+                }
+            }
+            // A28-01 补充修正：state 整体传入（旧 nullable data/isLoading 消费把
+            // Empty/RetryableError 压成空白/无反馈——AF29 复审点名）
+            // Q2：私信发送（userMessageSendMsg POST uid+content；Confirmed 后重拉会话=
+            // 官方 500ms refresh 同构语义）
+            var sendState by remember(name, profileFake) { mutableStateOf(WriteUi()) }
+            var sendVerify by remember(name, profileFake) { mutableStateOf(false) }
+            var sendVerifyAcked by remember(name, profileFake) { mutableStateOf(false) }
+            var sendTick by remember(name, profileFake) { mutableIntStateOf(0) }
+            var lastSendText by remember(name, profileFake) { mutableStateOf("") }
+            val convScope = rememberCoroutineScope()
+            fun doSend(text: String) {
+                val t = convToken
+                if (t.isBlank() || peerUid <= 0 || text.isBlank()) return
+                if (sendState.phase == WriteUiPhase.Pending) return
+                if (sendState.phase == WriteUiPhase.Verify && !sendVerifyAcked) {
+                    sendVerify = true  // S03：显式核对
+                    return
+                }
+                sendVerifyAcked = false
+                lastSendText = text
+                val cap = io.github.deserthouse.sdgun.core.session.SessionManager.store.epoch.value
+                sendState = WriteUi(WriteUiPhase.Pending)
+                convScope.launch {
+                    val st = MutationRunner.submit(
+                        MutationRequest(
+                            MutationKind.MESSAGE_SEND,
+                            mapOf("uid" to "$peerUid", "content" to text), t,
+                        ),
+                        mutGateway, cap,
+                        { c -> io.github.deserthouse.sdgun.core.session.SessionManager.store.epoch.isCurrent(c) },
+                    )
+                    when (st) {
+                        is MutationState.Confirmed -> {
+                            sendState = WriteUi(WriteUiPhase.Done)
+                            sendTick++  // 触发会话重拉（LaunchedEffect key 含 sendTick）
+                        }
+                        is MutationState.Rejected -> sendState = WriteUi(WriteUiPhase.Failed, st.reason)
+                        is MutationState.OutcomeUnknown -> {
+                            sendState = WriteUi(WriteUiPhase.Verify)
+                            sendVerify = true
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            LaunchedEffect(sendTick) {
+                if (sendTick > 0 && peerUid > 0 && convToken.isNotBlank() && profileFake == "off") {
+                    // 发送成功重拉（读端点 read-may-mutate 披露在案；仅 Confirmed 后触发）
+                    convState = UiState.InitialLoading
+                    convState = when (val r = ProfileRepository.fetchMessageList(convToken, peerUid, 1)) {
+                        is ProfileRepository.PrivateResult.Ok -> when {
+                            r.value.isEmpty() -> UiState.Empty("暂无消息")
+                            else -> UiState.Data(
+                                io.github.deserthouse.sdgun.feature.messages.ConversationData(
+                                    r.value.map { row ->
+                                        io.github.deserthouse.sdgun.feature.messages.ChatBubble(
+                                            text = row.content, time = row.timeText ?: "", me = false,
+                                        )
+                                    }
+                                ))
+                        }
+                        ProfileRepository.PrivateResult.AuthExpired -> UiState.AuthRequired
+                        ProfileRepository.PrivateResult.Failed ->
+                            UiState.RetryableError("会话加载失败，可重试")
+                    }
                 }
             }
             io.github.deserthouse.sdgun.feature.messages.ConversationDetailPage(
                 groupName = name,
-                data = (convState as? UiState.Data<*>)?.value
-                    as? io.github.deserthouse.sdgun.feature.messages.ConversationData,
-                isLoading = convState is UiState.InitialLoading,
+                state = convState,
                 onBack = { navController.popBackStack() },
+                onRetry = { convRetry++ },
+                canSend = peerUid > 0 && convToken.isNotBlank() && profileFake == "off",
+                sendState = sendState,
+                onSend = { text -> doSend(text) },
             )
+            if (sendVerify) {
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { sendVerify = false },
+                    title = { Text("结果待确认") },
+                    text = { Text("上次发送请求超时，结果未知。请核对会话记录后重试。") },
+                    confirmButton = {
+                        androidx.compose.material3.TextButton(onClick = {
+                            sendVerify = false
+                            sendVerifyAcked = true
+                            doSend(lastSendText)
+                        }) { Text("已核对，重发") }
+                    },
+                    dismissButton = {
+                        androidx.compose.material3.TextButton(onClick = {
+                            sendVerify = false
+                        }) { Text("取消") }
+                    },
+                )
+            }
         }
         // ── U3-b（F21）：通知中心（合成先行+权限拒绝态）──
         composable("notifications") {
@@ -841,7 +1392,13 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                 mutableStateOf<UiState<io.github.deserthouse.sdgun.feature.messages.NotifyData>>(
                     UiState.InitialLoading)
             }
-            LaunchedEffect(token, profileFake) {
+            var notifyRetry by remember { mutableIntStateOf(0) }  // A28-01
+            val ctx = LocalContext.current
+            // R3/A4-4：真链行（NotifyRow→分类行形态复用）；link 消费=行点击外开
+            var notifyRows = remember(token, profileFake) {
+                mutableStateListOf<ProfileRepository.NotifyRow>()
+            }
+            LaunchedEffect(token, profileFake, notifyRetry) {
                 notifyState = if (profileFake == "data") {
                     UiState.Data(io.github.deserthouse.sdgun.feature.messages.syntheticNotify())
                 } else if (profileFake == "empty") {
@@ -851,14 +1408,177 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                 } else if (token.isBlank()) {
                     UiState.AuthRequired
                 } else {
-                    // userNotifyIndex 解析器待凭据实测后补——诚实未接入
-                    UiState.RetryableError("通知读取待接口接入")
+                    // 真链（notifyList v3 POST query p；⚠️ read-may-mutate 披露——不安排真探）
+                    when (val r = ProfileRepository.fetchNotifyList(token, 1)) {
+                        is ProfileRepository.PrivateResult.Ok -> when {
+                            r.value.isEmpty() -> UiState.Empty("暂无通知")
+                            else -> {
+                                notifyRows.clear(); notifyRows.addAll(r.value)
+                                UiState.Data(io.github.deserthouse.sdgun.feature.messages.NotifyData(
+                                    r.value.map { row ->
+                                        io.github.deserthouse.sdgun.feature.messages.NotifyCategory(
+                                            name = row.title,
+                                            summary = row.content.ifBlank { row.time ?: "" },
+                                            route = row.link ?: "",
+                                        )
+                                    }
+                                ))
+                            }
+                        }
+                        // Q4：token 失效→AuthRequired
+                        ProfileRepository.PrivateResult.AuthExpired -> UiState.AuthRequired
+                        ProfileRepository.PrivateResult.Failed ->
+                            UiState.RetryableError("通知加载失败，可重试")
+                    }
+                }
+            }
+            // A4-6：本地投递验证通道（debug 专属——渠道创建/点击深链/去重全链实测；
+            // release 只保留渠道注册，投递由真实事件触发[推送服务端=外部依赖不在范围]）
+            if (io.github.deserthouse.sdgun.BuildConfig.DEBUG && notifyRows.isNotEmpty()) {
+                androidx.compose.runtime.LaunchedEffect(notifyRows.size) {
+                    val first = notifyRows.first()
+                    io.github.deserthouse.sdgun.feature.notifications.LocalNotifier.post(
+                        ctx, 1001,
+                        first.title, first.content, first.link,
+                    )
                 }
             }
             io.github.deserthouse.sdgun.feature.messages.NotificationPage(
                 state = notifyState,
                 onBack = { navController.popBackStack() },
-                onRetry = { notifyState = UiState.InitialLoading },
+                onRetry = { notifyRetry++ },
+                onOpenLink = { url -> openLink(url) },
+            )
+        }
+        // ── N1/A2-3：他人主页（getUserInfo POST id= 官方契约复用）──
+        composable("user/{uid}") { entry ->
+            val uid = entry.arguments?.getString("uid")?.toLongOrNull() ?: 0L
+            val userToken by prefs.apiToken.collectAsState()
+            val userScope = rememberCoroutineScope()
+            var userState by remember(uid) {
+                mutableStateOf<UiState<ProfileRepository.UserProfile>>(UiState.InitialLoading)
+            }
+            var userRetry by remember(uid) { mutableIntStateOf(0) }
+            // Q2：关注/取消关注（fansAdd GET user_id / removeRelation GET user_id+remove_his，
+            // jadx UserHomeFragment.attentionToNet 同构；S03 相位纪律同款）
+            var followState by remember(uid) { mutableStateOf(WriteUi()) }
+            var followOverride by remember(uid) { mutableStateOf<Boolean?>(null) }
+            var followVerify by remember(uid) { mutableStateOf(false) }
+            var followVerifyAcked by remember(uid) { mutableStateOf(false) }
+            LaunchedEffect(uid, userToken, userRetry) {
+                if (uid <= 0) { userState = UiState.RetryableError("无效用户"); return@LaunchedEffect }
+                followOverride = null; followState = WriteUi()  // 重取资料=关注态回到响应口径
+                userState = UiState.InitialLoading
+                when (val r = ProfileRepository.fetchMyInfo(userToken, uid)) {
+                    is ProfileRepository.PrivateResult.Ok -> UiState.Data(r.value)
+                    // Q4：本人 token 失效→AuthRequired；他人资料失败仍走可重试（二者根因不同）
+                    ProfileRepository.PrivateResult.AuthExpired -> UiState.AuthRequired
+                    ProfileRepository.PrivateResult.Failed ->
+                        UiState.RetryableError("资料加载失败（可能需要登录或该用户不存在）")
+                }
+            }
+            fun doFollowToggle() {
+                val t = userToken
+                if (t.isBlank()) { navController.navigate("login"); return }
+                if (followState.phase == WriteUiPhase.Pending) return
+                if (followState.phase == WriteUiPhase.Verify && !followVerifyAcked) {
+                    followVerify = true  // S03：显式核对动作，不自动当核对完成
+                    return
+                }
+                followVerifyAcked = false  // 核对消费（再 Unknown 须再核对）
+                val parsed = (userState as? UiState.Data<*>)?.value as? ProfileRepository.UserProfile
+                val cur = followOverride ?: parsed?.relationStatus?.let { it == 1 } ?: return
+                val cap = io.github.deserthouse.sdgun.core.session.SessionManager.store.epoch.value
+                followState = WriteUi(WriteUiPhase.Pending)
+                userScope.launch {
+                    val (kind, params) = if (cur) {
+                        MutationKind.FOLLOW_REMOVE to mapOf("user_id" to "$uid", "remove_his" to "0")
+                    } else {
+                        MutationKind.FOLLOW_ADD to mapOf("user_id" to "$uid")
+                    }
+                    val st = MutationRunner.submit(
+                        MutationRequest(kind, params, t), mutGateway, cap,
+                        { c -> io.github.deserthouse.sdgun.core.session.SessionManager.store.epoch.isCurrent(c) },
+                    )
+                    when (st) {
+                        is MutationState.Confirmed -> {
+                            followOverride = !cur
+                            followState = WriteUi(WriteUiPhase.Done)
+                        }
+                        is MutationState.Rejected ->
+                            followState = WriteUi(WriteUiPhase.Failed, st.reason)
+                        is MutationState.OutcomeUnknown -> {
+                            // 不翻转本地态：现状未知保持显示，核对后按当前归属重发
+                            followState = WriteUi(WriteUiPhase.Verify)
+                            followVerify = true
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            val followDisplay: Boolean? = followOverride ?: (userState as? UiState.Data<*>)?.let {
+                (it.value as? ProfileRepository.UserProfile)?.relationStatus?.let { rs -> rs == 1 }
+            }
+            io.github.deserthouse.sdgun.feature.profile.UserProfilePage(
+                uid = uid,
+                state = userState,
+                onBack = { navController.popBackStack() },
+                onRetry = { userRetry++ },
+                following = followDisplay,
+                followState = followState,
+                onFollowToggle = { doFollowToggle() },
+            )
+            if (followVerify) {
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { followVerify = false },
+                    title = { Text("结果待确认") },
+                    text = { Text("上次关注请求超时，结果未知。请核对当前关注状态后重试。") },
+                    confirmButton = {
+                        androidx.compose.material3.TextButton(onClick = {
+                            followVerify = false
+                            followVerifyAcked = true
+                            doFollowToggle()
+                        }) { Text("已核对，重发") }
+                    },
+                    dismissButton = {
+                        androidx.compose.material3.TextButton(onClick = {
+                            followVerify = false
+                        }) { Text("取消") }
+                    },
+                )
+            }
+        }
+        // ── N1/A2-4：本地帖阅读历史（纯本机 SharedPreferences）──
+        composable("profile/local_history") {
+            val ctx = LocalContext.current
+            var entries by remember {
+                mutableStateOf(io.github.deserthouse.sdgun.data.repository.ThreadHistoryStore.load(ctx))
+            }
+            io.github.deserthouse.sdgun.feature.profile.LocalHistoryPage(
+                entries = entries,
+                onBack = { navController.popBackStack() },
+                onOpenThread = { tid -> navController.navigate("thread/$tid/0") },
+                onRemove = { tid ->
+                    io.github.deserthouse.sdgun.data.repository.ThreadHistoryStore.remove(ctx, tid)
+                    entries = io.github.deserthouse.sdgun.data.repository.ThreadHistoryStore.load(ctx)
+                },
+            )
+        }
+        // ── Q5（A1-10）：搜索原生页（圈子 allTopicSearch + 用户 userSearch；帖子=H5 桥接）──
+        composable("search") {
+            val searchToken by prefs.apiToken.collectAsState()
+            io.github.deserthouse.sdgun.feature.community.SearchPage(
+                onBack = { navController.popBackStack() },
+                onOpenUrl = { url -> openLink(url) },
+                onOpenUser = { uid -> if (uid > 0) navController.navigate("user/$uid") },
+                searchTopics = { kw ->
+                    io.github.deserthouse.sdgun.data.repository.BoardListRepository
+                        .searchTopics(searchToken, kw)
+                },
+                searchUsers = { kw ->
+                    io.github.deserthouse.sdgun.data.repository.ProfileRepository
+                        .searchUsers(searchToken, kw)
+                },
             )
         }
         // ── U3-c（F23~27）：H5 服务（配置驱动）+ 容器 ──
@@ -949,6 +1669,8 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                     navController.popBackStack("home", inclusive = false)
                     navController.navigate("account")
                 },
+                onOpenUrl = { url -> navController.navigate(
+                    "h5/${Uri.encode("账号服务")}?url=${Uri.encode(url)}") },
             )
         }
         composable("account") {
@@ -968,6 +1690,10 @@ private fun TabShell(
     activeIdx: Int,
     onTab: (Int) -> Unit,
     onSearch: () -> Unit = {},
+    // A28-03 单一壳契约：顶栏只此一层——页级标题/动作经此槽传入，
+    // 页内 Scaffold 一律不再持有 TopAppBar（双顶栏曾在此叠出）
+    title: String = "SDGun",
+    actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     // U4 补真实现（A-R3）：宽屏三档——≥600dp 底栏换 NavigationRail（U2 声明兑现）
@@ -979,8 +1705,9 @@ private fun TabShell(
             topBar = {
                 // R4：原生导航搜索入口——落兼容壳搜索页（mag1 无帖子搜索 API，搜索永久岛）
                 TopAppBar(
-                    title = { Text("SDGun") },
+                    title = { Text(title) },
                     actions = {
+                        actions()
                         IconButton(onClick = onSearch) {
                             Icon(Icons.Filled.Search, contentDescription = "搜索")
                         }
@@ -989,9 +1716,10 @@ private fun TabShell(
             },
             bottomBar = { AppBottomBar(activeIdx = activeIdx, onTab = onTab) },
         ) { padding ->
-            // 只消费 bottom：页内自持 Scaffold 的 TopAppBar 已处理状态栏 inset，
-            // 顶部再套一层会造成双倍留白（A70 走查实测）
-            Box(Modifier.fillMaxSize().padding(bottom = padding.calculateBottomPadding())) { content() }
+            // R0-4（A31-S08）单一 inset 所有者：TabShell 顶栏是根页唯一 topBar，
+            // content 消费完整 padding（旧只消费 bottom=根页首行被顶栏盖，审查实锤）。
+            // 详情页不经 TabShell，自带完整壳不受影响。
+            Box(Modifier.fillMaxSize().padding(padding)) { content() }
         }
     } else {
         Row(Modifier.fillMaxSize()) {
@@ -1002,8 +1730,9 @@ private fun TabShell(
                 containerColor = MaterialTheme.colorScheme.surface,
                 topBar = {
                     TopAppBar(
-                        title = { Text("SDGun") },
+                        title = { Text(title) },
                         actions = {
+                            actions()
                             IconButton(onClick = onSearch) {
                                 Icon(Icons.Filled.Search, contentDescription = "搜索")
                             }
@@ -1011,8 +1740,7 @@ private fun TabShell(
                     )
                 },
             ) { padding ->
-                // rail 模式页内自持顶栏不再叠加：同 compact 只消费 bottom
-                Box(Modifier.fillMaxSize().padding(bottom = padding.calculateBottomPadding())) { content() }
+                Box(Modifier.fillMaxSize().padding(padding)) { content() }  // R0-4 同 compact
             }
         }
     }

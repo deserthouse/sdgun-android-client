@@ -24,6 +24,9 @@ class ThreadContentTest {
                 when (it) {
                     is ContentBlock.Text -> "t"
                     is ContentBlock.Image -> "i"
+                    is ContentBlock.Video -> "v"
+                    is ContentBlock.Attachment -> "a"
+                    is ContentBlock.Link -> "l"
                 }
             },
         )
@@ -106,5 +109,52 @@ class ThreadContentTest {
         val html = "<IMG SRC=\"https://x/1.jpg\">图"
         val blocks = parseContentBlocks(1L, html)
         assertEquals(1, blocks.count { it is ContentBlock.Image })
+    }
+
+    // ── AF29-04（A1-1）媒体模型反例/回归 ──
+    @org.junit.Test
+    fun `video 标签解析为 Video 块带真实 URL`() {
+        val html = "前段<video src=\"https://cdn.example/v.mp4\"></video>后段"
+        val blocks = io.github.deserthouse.sdgun.feature.thread.parseContentBlocks(1L, html)
+        val kinds = blocks.map { it::class.simpleName }
+        org.junit.Assert.assertTrue("应有 Video 块（实际=$kinds）", blocks.any { it is io.github.deserthouse.sdgun.feature.thread.ContentBlock.Video })
+        org.junit.Assert.assertEquals(
+            "https://cdn.example/v.mp4",
+            (blocks.first { it is io.github.deserthouse.sdgun.feature.thread.ContentBlock.Video }
+                as io.github.deserthouse.sdgun.feature.thread.ContentBlock.Video).url)
+    }
+
+    @org.junit.Test
+    fun `媒体附件链接成 Attachment 块论坛内链成 Link 块`() {
+        val html = "<a href=\"https://f.example/files/kit.zip\">套件下载</a>" +
+            "<a href=\"https://bbs.sdgun.com.cn/forum.php?mod=viewthread&tid=1\">站内帖</a>"
+        val blocks = io.github.deserthouse.sdgun.feature.thread.parseContentBlocks(2L, html)
+        val att = blocks.filterIsInstance<io.github.deserthouse.sdgun.feature.thread.ContentBlock.Attachment>()
+        val lnk = blocks.filterIsInstance<io.github.deserthouse.sdgun.feature.thread.ContentBlock.Link>()
+        org.junit.Assert.assertEquals(1, att.size)
+        org.junit.Assert.assertEquals("套件下载", att[0].name)
+        org.junit.Assert.assertEquals("https://f.example/files/kit.zip", att[0].url)
+        // R1/S04 契约：论坛内链保留 Link 块（openLink 分流：域内壳内浏览，不丢目标）
+        org.junit.Assert.assertEquals(1, lnk.size)
+        org.junit.Assert.assertEquals("站内帖", lnk[0].text)
+    }
+
+    @org.junit.Test
+    fun `a 内嵌 img 不产生重复块`() {
+        val html = "<a href=\"https://pic.example/big.jpg\"><img src=\"https://pic.example/small.jpg\"></a>"
+        val blocks = io.github.deserthouse.sdgun.feature.thread.parseContentBlocks(3L, html)
+        val imgs = blocks.filterIsInstance<io.github.deserthouse.sdgun.feature.thread.ContentBlock.Image>()
+        org.junit.Assert.assertEquals("嵌套 img 只产一个 Image 块", 1, imgs.size)
+    }
+
+    @org.junit.Test
+    fun `B0-2 视频回退文案被滤除且同段其余文本保留`() {
+        val html = "前文<video src=\"x\"></video>您的设备不支持视频标签。后文继续"
+        val blocks = io.github.deserthouse.sdgun.feature.thread.parseContentBlocks(9L, html)
+        val texts = blocks.filterIsInstance<io.github.deserthouse.sdgun.feature.thread.ContentBlock.Text>()
+            .joinToString("|") { it.text }
+        org.junit.Assert.assertFalse("回退文案不得上屏", texts.contains("您的设备不支持视频标签"))
+        org.junit.Assert.assertTrue(texts.contains("前文"))
+        org.junit.Assert.assertTrue(texts.contains("后文继续"))
     }
 }

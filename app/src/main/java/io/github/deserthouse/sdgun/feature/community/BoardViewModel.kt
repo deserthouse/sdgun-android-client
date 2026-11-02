@@ -36,7 +36,9 @@ class BoardViewModel(
     private var page = 1
     private var totalPages = 1
     private val gen = AtomicInteger(0)
-    private val paging = AtomicBoolean(false)
+    /** R0-3（A31-S02）：分页在途改 Compose 状态（UI 响应式；原 AtomicBoolean 不触发重组） */
+    var paging by androidx.compose.runtime.mutableStateOf(false)
+        private set
     private var job: Job? = null
 
     fun start(fid: Long) {
@@ -44,7 +46,7 @@ class BoardViewModel(
         meta = null
         val g = gen.incrementAndGet()
         job?.cancel()
-        paging.set(false)
+        paging = false
         listState = UiState.InitialLoading
         rows.clear(); page = 1; totalPages = 1
         job = scope.launch {
@@ -64,7 +66,7 @@ class BoardViewModel(
         order = newOrder; typeId = newTypeId
         val g = gen.incrementAndGet()
         job?.cancel()
-        paging.set(false)
+        paging = false
         listState = UiState.InitialLoading
         rows.clear(); page = 1; totalPages = 1
         job = scope.launch {
@@ -74,13 +76,54 @@ class BoardViewModel(
         }
     }
 
+    /**
+     * B1-1：下拉刷新——保留旧行进 Refreshing 态（不闪白）；
+     * 成功换新首页（失败回 RetryableError 但保 rows 语义由 UiState.Stale 承载略简：失败保旧行可读）
+     */
+    fun refresh(fid: Long) {
+        val g = gen.incrementAndGet()
+        job?.cancel()
+        paging = false
+        val oldRows = rows.toList()
+        val oldPage = page
+        val oldTotal = totalPages
+        if (oldRows.isNotEmpty()) {
+            listState = UiState.Refreshing(BoardListRepository.PageResult(oldRows, page, totalPages))
+        } else {
+            listState = UiState.InitialLoading
+        }
+        rows.clear(); page = 1; totalPages = 1
+        job = scope.launch {
+            val pr = fetchPage(fid, 1, order, typeId)
+            if (gen.get() != g) return@launch
+            if (pr == null && oldRows.isNotEmpty()) {
+                // R0-2（A31-S01）：刷新失败保旧行（Stale 可重试），页元数据一并回滚——
+                // 旧实现走 applyFirst(null)=RetryableError 丢掉全部已取得内容（审查实锤）
+                rows.clear(); rows.addAll(oldRows)
+                page = oldPage; totalPages = oldTotal
+                listState = UiState.Stale(
+                    BoardListRepository.PageResult(oldRows, oldPage, oldTotal),
+                    "刷新失败，内容仍可浏览，可重试",
+                )
+            } else {
+                applyFirst(pr)
+            }
+        }
+    }
+
     fun loadMore(fid: Long) {
-        if (paging.get() || listState !is UiState.Data<*>) return  // A24-06：首屏在途禁翻页（反例：空尾页竞态）
+        // R0-2（A31-S01）：Stale（刷新/分页失败保旧）态允许按原意图重试下一页——
+        // 旧 !is Data 门把失败后的列表锁死成"只能离页重进"（审查实锤）
+        if (paging ||
+            (listState !is UiState.Data<*> && listState !is UiState.Stale<*>)
+        ) return
+        // R0-3：VM 终页自守——UI 门失效（旧预取缺陷）时也不越界多发（审查探针=终页后仍发请求）
+        if (page >= totalPages) return
         val g = gen.get()
-        paging.set(true)
+        paging = true
         job = scope.launch {
             val pr = fetchPage(fid, page + 1, order, typeId)
-            paging.set(false)
+            paging = false
             if (gen.get() != g) return@launch
             when {
                 pr == null -> listState = UiState.Stale(

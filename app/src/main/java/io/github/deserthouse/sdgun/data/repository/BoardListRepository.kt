@@ -89,7 +89,7 @@ object BoardListRepository {
                     viewCount = r.optString("click").takeIf { it.isNotBlank() && it != "null" },
                     lastReplyTime = r.optString("last_reply_time")
                         .takeIf { it.isNotBlank() && it != "null" }
-                        ?.let { formatUnixTime(it) },
+                        ?.let { relativeTime(it) },
                     isTop = r.optInt("is_top", 0) > 0,
                     isDigest = r.optInt("digest", 0) > 0,
                     applaudCount = r.optString("applaud_count").takeIf { it.isNotBlank() && it != "null" },
@@ -107,6 +107,23 @@ object BoardListRepository {
             val cal = java.util.Calendar.getInstance().apply { timeInMillis = sec * 1000 }
             java.text.SimpleDateFormat("yyyy-M-d HH:mm", java.util.Locale.CHINA).format(cal.time)
         }.getOrDefault(raw)
+
+    /**
+     * B1-7：相对时间——刚刚/N 分钟前/N 小时前/N 天前，≥7 天回落绝对时间。
+     * 非纯数字原样保留；未来时间（时钟偏差）按「刚刚」处理不出现负数。
+     * nowMillis 注入供 JVM 测试。
+     */
+    fun relativeTime(raw: String, nowMillis: Long = System.currentTimeMillis()): String {
+        val sec = raw.toLongOrNull() ?: return raw
+        val diffMin = (nowMillis / 1000 - sec) / 60
+        return when {
+            diffMin < 1 -> "刚刚"
+            diffMin < 60 -> "$diffMin 分钟前"
+            diffMin < 60 * 24 -> "${diffMin / 60} 小时前"
+            diffMin < 60 * 24 * 7 -> "${diffMin / 60 / 24} 天前"
+            else -> formatUnixTime(raw)
+        }
+    }
 
     private fun firstPic(r: JSONObject): String? {
         val arr = r.optJSONArray("pics") ?: return null
@@ -210,4 +227,55 @@ object BoardListRepository {
             null
         }
     }
+
+    // ── Q5（A1-10）：圈子搜索（allTopicSearch，DataPage 族=GET p；jadx
+    // AllTopicSearchActivity：param keyword，DataViewType icon_name_line→icon/name/link 行）──
+    const val ALL_TOPIC_SEARCH = "https://mag1.sdgun.net/mag/circle/v1/show/allTopicSearch"
+
+    data class TopicSearchRow(
+        val name: String,
+        val icon: String?,
+        val link: String?,
+    )
+
+    /** 纯函数解析（S05 口径：null=失败/拒绝/未知信封；合法空=空列表） */
+    fun parseTopicSearch(json: String): List<TopicSearchRow>? {
+        return try {
+            val obj = JSONObject(json)
+            if (obj.has("success") && !obj.optBoolean("success")) return null
+            val arr = obj.optJSONArray("list") ?: return null
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                val name = o.optString("name").takeIf { it.isNotBlank() && it != "null" }
+                    ?: return@mapNotNull null
+                TopicSearchRow(
+                    name = name,
+                    icon = o.optString("icon").takeIf { it.startsWith("http") },
+                    link = o.optString("link").takeIf { it.startsWith("http") },
+                )
+            }
+        } catch (e: Exception) { null }
+    }
+
+    /** 圈子搜索（GET keyword+p；游客可用性=使用自然验证，失败诚实呈现） */
+    suspend fun searchTopics(token: String, keyword: String, page: Int = 1): List<TopicSearchRow>? =
+        withContext(Dispatchers.IO) {
+            if (keyword.isBlank()) return@withContext emptyList<TopicSearchRow>()
+            try {
+                val url = "$ALL_TOPIC_SEARCH?keyword=" +
+                    java.net.URLEncoder.encode(keyword, "UTF-8") + "&p=$page"
+                val conn = URL(url).openConnection() as HttpURLConnection
+                conn.connectTimeout = 12000
+                conn.readTimeout = 15000
+                conn.setRequestProperty(
+                    "User-Agent",
+                    "Mozilla/5.0 (Linux; Android 16; Pixel 8) MAGAPPX|6.4.0-2.90-30042|" +
+                        "Android 16 google Pixel 8|shuidan|koPx4DY3tw7hrg5nKpSmc3|" +
+                        "88af41c4c24832860d97d44e436f8842|174e1e66702c31aa7e949f5ab30db60b|$token",
+                )
+                try {
+                    parseTopicSearch(conn.inputStream.bufferedReader().readText())
+                } finally { conn.disconnect() }
+            } catch (e: Exception) { null }
+        }
 }

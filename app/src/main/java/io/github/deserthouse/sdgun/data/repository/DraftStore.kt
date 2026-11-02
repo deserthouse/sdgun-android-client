@@ -20,6 +20,10 @@ object DraftStore {
     fun key(owner: String, tid: Long, replyPid: Long?): String =
         "draft_${owner}_${tid}_${replyPid ?: "root"}"
 
+    /** R2/A3-4：投稿草稿键（owner+板块维度；tid 取 -fid 负值域与回复草稿零冲突） */
+    fun postKey(owner: String, fid: Long): String =
+        "draft_${owner}_post_${fid}"
+
     /** 会话态 → 所有者标识（登录=u<id>；游客=guest） */
     fun ownerOf(userId: Long): String = if (userId > 0L) "u$userId" else "guest"
 
@@ -32,5 +36,22 @@ object DraftStore {
 
     fun clear(context: Context, owner: String, tid: Long, replyPid: Long? = null) {
         sp(context).edit().remove(key(owner, tid, replyPid)).apply()
+    }
+
+    /** R2/A3-4：投稿草稿读/写/清（键=postKey(owner, fid)） */
+    fun loadPost(context: Context, owner: String, fid: Long): Pair<String, String> {
+        val sp = sp(context)
+        val raw = sp.getString(postKey(owner, fid), "") ?: ""
+        val i = raw.indexOf("")
+        return if (i < 0) "" to "" else raw.take(i) to raw.substring(i + 1)
+    }
+
+    fun savePost(context: Context, owner: String, fid: Long, title: String, content: String) {
+        sp(context).edit()
+            .putString(postKey(owner, fid), title + "" + content).apply()
+    }
+
+    fun clearPost(context: Context, owner: String, fid: Long) {
+        sp(context).edit().remove(postKey(owner, fid)).apply()
     }
 }

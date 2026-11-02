@@ -1,6 +1,9 @@
 package io.github.deserthouse.sdgun.feature.feed
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -46,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.deserthouse.sdgun.core.model.UiState
+import io.github.deserthouse.sdgun.core.designsystem.B1PullToRefresh
 import io.github.deserthouse.sdgun.data.repository.NewsItem
 import io.github.deserthouse.sdgun.feature.thread.sampleSize
 import kotlinx.coroutines.flow.StateFlow
@@ -95,24 +99,24 @@ private fun FocusFeed(
 ) {
     val listState = rememberLazyListState()
     val ui by state.collectAsState()
+    // A28-03 单一壳（审查补漏）：频道条不再借 topBar 槽（与 TabShell 顶栏构成结构双槽）；
+    // status inset 由 TabShell 顶栏（M3 TopAppBar 默认 windowInsets）承担——A6 装机验证布局
     Scaffold(
         modifier = modifier,
-        topBar = {
-            Column(Modifier.statusBarsPadding()) {
-                ChannelBar(channels, currentChannel, onChannelSelect)
-            }
-        },
         containerColor = MaterialTheme.colorScheme.surface,
     ) { padding ->
+        // B0-1（V1 修复）：Scaffold content 是 Box——旧写法 Column(频道条) 与 when(内容)
+        // 是兄弟节点互相叠放，fillMaxSize 的内容层把频道条盖死。改单列纵排。
+        Column(Modifier.padding(padding).fillMaxSize()) {
+            // R0-4（A31-S08）：inset 所有权归 TabShell（content 消费完整 padding）——
+            // B0-1 的逐页 statusBarsPadding 属掩盖性修复，撤除防双倍留白
+            ChannelBar(channels, currentChannel, onChannelSelect)
         when (val s = ui) {
-            is UiState.InitialLoading -> Column(
-                Modifier.fillMaxSize().padding(padding),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) { CircularProgressIndicator() }
+            is UiState.InitialLoading -> io.github.deserthouse.sdgun.core.designsystem.SkeletonList(
+                rows = 5, withMedia = true, modifier = Modifier.fillMaxSize())
 
             is UiState.Empty -> Column(
-                Modifier.fillMaxSize().padding(padding),
+                Modifier.fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
@@ -121,7 +125,7 @@ private fun FocusFeed(
             }
 
             is UiState.RetryableError -> Column(
-                Modifier.fillMaxSize().padding(padding),
+                Modifier.fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
@@ -130,35 +134,40 @@ private fun FocusFeed(
             }
 
             is UiState.AuthRequired -> Column(
-                Modifier.fillMaxSize().padding(padding),
+                Modifier.fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) { Text("需要登录", style = MaterialTheme.typography.bodyLarge) }
 
             is UiState.PermissionDenied -> Text(
-                s.message, modifier = Modifier.padding(padding),
+                s.message, modifier = Modifier.padding(16.dp),
             )
 
-            is UiState.Data<*> -> FeedList(
-                items = @Suppress("UNCHECKED_CAST") (s as UiState.Data<List<NewsItem>>).value,
-                stale = null, onOpenLink = onOpenLink, padding = padding,
-                hasMore = hasMore, loadingMore = loadingMore, onLoadMore = onLoadMore,
-                listState = listState,
-            )
+            is UiState.Data<*> -> B1PullToRefresh(
+                refreshing = false, onRefresh = onRetry,
+            ) {
+                FeedList(
+                    items = @Suppress("UNCHECKED_CAST") (s as UiState.Data<List<NewsItem>>).value,
+                    stale = null, onOpenLink = onOpenLink, padding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                    hasMore = hasMore, loadingMore = loadingMore, onLoadMore = onLoadMore,
+                    listState = listState,
+                )
+            }
 
             is UiState.Refreshing<*> -> FeedList(
                 items = @Suppress("UNCHECKED_CAST") (s as UiState.Refreshing<List<NewsItem>>).stale,
-                stale = null, onOpenLink = onOpenLink, padding = padding,
+                stale = null, onOpenLink = onOpenLink, padding = androidx.compose.foundation.layout.PaddingValues(0.dp),
                 hasMore = hasMore, loadingMore = loadingMore, onLoadMore = onLoadMore,
                 listState = listState,
             )
 
             is UiState.Stale<*> -> FeedList(
                 items = @Suppress("UNCHECKED_CAST") (s as UiState.Stale<List<NewsItem>>).stale,
-                stale = s.error, onOpenLink = onOpenLink, padding = padding,
+                stale = s.error, onOpenLink = onOpenLink, padding = androidx.compose.foundation.layout.PaddingValues(0.dp),
                 hasMore = hasMore, loadingMore = loadingMore, onLoadMore = onLoadMore,
                 listState = listState,
             )
+        }
         }
     }
 }
@@ -174,6 +183,11 @@ private fun FeedList(
     onLoadMore: () -> Unit,
     listState: androidx.compose.foundation.lazy.LazyListState,
 ) {
+    // B1-4：尾部预取（倒数 3 项进视口即自动加载）——「加载更多」钮降级为状态指示
+    io.github.deserthouse.sdgun.core.designsystem.InfiniteScrollHandler(
+        listState = listState, isLoadingMore = loadingMore, hasMore = hasMore,
+        onLoadMore = onLoadMore,
+    )
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().padding(padding),
@@ -198,6 +212,7 @@ private fun FeedList(
         }
         if (hasMore) {
             item(key = "load_more") {
+                // B1-4：自动预取后仅余加载指示（点击保留兜底）
                 TextButton(
                     onClick = onLoadMore,
                     modifier = Modifier.fillMaxWidth(),
@@ -269,11 +284,29 @@ private fun FocusCover(url: String) {
             }
         }
     }
+    if (bitmap == null) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp)
+                .aspectRatio(16f / 9f)
+                .clip(MaterialTheme.shapes.medium)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        )
+        return
+    }
     val bmp = bitmap ?: return
+    // N5/V01（A31）：封面上限 16:9 裁切（ContentScale.Crop）——防竖图占满整屏；
+    // 加载期固定占位盒防行高跳变（R3 时代「封面渲染」的布局债一并清）
     androidx.compose.foundation.Image(
         bitmap = bmp.asImageBitmap(),
         contentDescription = null,
-        modifier = Modifier.fillMaxWidth(),
+        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp)
+            .aspectRatio(16f / 9f)
+            .clip(MaterialTheme.shapes.medium),
     )
 }
 

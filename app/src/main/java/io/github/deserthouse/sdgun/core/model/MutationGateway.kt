@@ -10,7 +10,8 @@ interface MutationGateway {
 
 sealed class MutationResult {
 
-    data class Confirmed(val value: String) : MutationResult()
+    /** payload=成功响应原始体（Q3：THREAD_POST 成功定位解析新帖 tid 用；其余 kind 为 null 语义不变） */
+    data class Confirmed(val value: String, val payload: String? = null) : MutationResult()
     data class Rejected(val code: Int, val msg: String) : MutationResult()
     object OutcomeUnknown : MutationResult()
 }

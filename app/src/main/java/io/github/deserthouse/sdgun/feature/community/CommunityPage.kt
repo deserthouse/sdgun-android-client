@@ -51,16 +51,12 @@ fun CommunityPage(
     onOpenBoard: (Long, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // Q7（Expanded 多列）：布局矩阵 1 列 <600dp / 2 列 600-839 / 3 列 >=840
+    val widthDp = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
+    val columns = communityColumns(widthDp)
+    // R0-4（A31-S08）：顶栏归 TabShell（title="社区"），页内不再持有——双 topBar 结构根除
     Scaffold(
         modifier = modifier,
-        topBar = {
-            TopAppBar(
-                title = { Text("社区") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
-            )
-        },
         containerColor = MaterialTheme.colorScheme.surface,
     ) { padding ->
         when (state) {
@@ -97,8 +93,31 @@ fun CommunityPage(
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                             )
                         }
-                        items(group.boards, key = { "b_${it.circleId}" }) { board ->
-                            BoardRow(board) { onOpenBoard(board.fid, board.name) }
+                        if (columns == 1) {
+                            items(group.boards, key = { "b_${it.circleId}" }) { board ->
+                                BoardRow(board) { onOpenBoard(board.fid, board.name) }
+                            }
+                        } else {
+                            // Q7：宽屏多列（chunk 行布局；尾行占位补齐等宽）
+                            group.boards.chunked(columns).forEachIndexed { ci, chunk ->
+                                item(key = "gc_${group.id}_$ci") {
+                                    Row(
+                                        Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        chunk.forEach { board ->
+                                            BoardRow(
+                                                board,
+                                                horizontalPadding = 0.dp,
+                                                modifier = Modifier.weight(1f),
+                                            ) { onOpenBoard(board.fid, board.name) }
+                                        }
+                                        repeat(columns - chunk.size) {
+                                            androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -107,19 +126,33 @@ fun CommunityPage(
     }
 }
 
+/** Q7：社区目录列数矩阵（纯函数，JVM 可测） */
+fun communityColumns(widthDp: Int): Int = when {
+    widthDp >= 840 -> 3
+    widthDp >= 600 -> 2
+    else -> 1
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun BoardRow(board: BoardRepository.Board, onClick: () -> Unit) {
+private fun BoardRow(
+    board: BoardRepository.Board,
+    modifier: Modifier = Modifier,
+    /** Q7：多列网格由外层 Row 管水平留白，卡自身让 0（单列默认 12dp 维持原布局） */
+    horizontalPadding: androidx.compose.ui.unit.Dp = 12.dp,
+    /** 函数类型参数置末尾（trailing lambda 语义；教训条 5） */
+    onClick: () -> Unit,
+) {
     Card(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp),
+        modifier = modifier.fillMaxWidth().padding(horizontal = horizontalPadding, vertical = 3.dp),
     ) {
         Row(
             Modifier.padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // A24-07 板块行真实化：icon_url 有则加载真图，否则保留语义占位
-            BoardIcon(url = board.iconUrl)
+            BoardIcon(url = board.iconUrl, fallbackName = board.name)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(board.name, style = MaterialTheme.typography.titleSmall,
@@ -141,7 +174,7 @@ private fun BoardRow(board: BoardRepository.Board, onClick: () -> Unit) {
 
 /** 板块图标：icon_url 小图有界解码；无图/失败=语义占位（A24-07）。 */
 @Composable
-fun BoardIcon(url: String?) {
+fun BoardIcon(url: String?, fallbackName: String = "") {
     var bitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var failed by remember { mutableStateOf(false) }
     androidx.compose.runtime.LaunchedEffect(url) {
@@ -182,8 +215,12 @@ fun BoardIcon(url: String?) {
                 contentDescription = "板块图标",
                 modifier = Modifier.size(44.dp).clip(shape),
             )
-            failed -> Text("板块", style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            failed -> Text(
+                // R5（V01/N5）：占位=板块名首字符（语义化，替换重复「板块」二字）
+                fallbackName.take(1).ifBlank { "版" },
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             else -> androidx.compose.material3.CircularProgressIndicator(
                 Modifier.size(20.dp), strokeWidth = 2.dp)
         }

@@ -3,7 +3,11 @@ import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
 import androidx.compose.material3.Shapes
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
@@ -90,6 +94,20 @@ private val DarkColors = darkColorScheme(
 )
 
 /** M3E 大圆角形状令牌 */
+/** B1-9：M3E 动效 token——组件交互统一 spring（expressive 减速曲线感） */
+val SdEmphasizedSpring = androidx.compose.animation.core.spring<Float>(
+    dampingRatio = androidx.compose.animation.core.Spring.DampingRatioLowBouncy,
+    stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow,
+)
+
+/** B1-9：正文排版微调（行高放宽/标题加重）——M3E 排版层级从默认抬一档 */
+private val SdTypography = Typography(
+    titleLarge = Typography().titleLarge.copy(fontWeight = FontWeight.SemiBold),
+    titleMedium = Typography().titleMedium.copy(fontWeight = FontWeight.SemiBold),
+    bodyLarge = Typography().bodyLarge.copy(lineHeight = 24.sp, letterSpacing = 0.2.sp),
+    bodyMedium = Typography().bodyMedium.copy(lineHeight = 20.sp),
+)
+
 val SdShapes = Shapes(
     extraSmall = RoundedCornerShape(8.dp),
     small = RoundedCornerShape(12.dp),
@@ -116,6 +134,7 @@ fun SDGunTheme(
     MaterialTheme(
         colorScheme = colorScheme,
         shapes = SdShapes,
+        typography = SdTypography,
         content = content,
     )
 }

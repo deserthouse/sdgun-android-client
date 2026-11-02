@@ -1,5 +1,9 @@
 package io.github.deserthouse.sdgun.feature.thread
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.Icon
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -23,11 +27,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -60,12 +66,16 @@ fun AvatarPlaceholder(name: String?, sizeDp: Dp) {
     }
 }
 
-/** 内容块渲染（A70-04）：文本块/图片块；图片点击回调整组图+命中下标。 */
+/** 内容块渲染（A70-04 + AF29-04）：文本/图片/视频/附件/链接；
+ * 视频与附件真实可点击（onOpenUrl 外开），链接文本可点。 */
 @Composable
 fun BlockView(
     block: ContentBlock,
     group: List<String>,
     onOpenImage: (List<String>, Int) -> Unit,
+    onOpenUrl: (String) -> Unit = {},
+    /** A1-3：附件下载（DownloadManager+WebView Cookie；默认空实现保旧调用点） */
+    onDownloadAttachment: (String, String) -> Unit = { _, _ -> },
 ) {
     when (block) {
         is ContentBlock.Text -> Text(
@@ -76,6 +86,57 @@ fun BlockView(
 
         is ContentBlock.Image -> PostImage(block.url) {
             onOpenImage(group, group.indexOf(block.url).coerceAtLeast(0))
+        }
+
+        is ContentBlock.Video -> TextButton(
+            onClick = { onOpenUrl(block.url) },
+            modifier = Modifier.padding(horizontal = 12.dp),
+        ) {
+            Icon(
+                androidx.compose.material.icons.Icons.Filled.PlayArrow,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text("视频（点击播放/打开）", style = MaterialTheme.typography.labelLarge)
+        }
+
+        is ContentBlock.Attachment -> Row(
+            Modifier.padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // A1-3：附件=文件语义，主钮=系统下载器（带 WebView Cookie 供站方附件鉴权）；
+            // 「打开」次钮保留浏览器路径（无 Cookie 场景兜底）
+            TextButton(onClick = { onDownloadAttachment(block.url, block.name) }) {
+                Icon(
+                    androidx.compose.material.icons.Icons.Filled.AttachFile,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "附件：${block.name}",
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            TextButton(onClick = { onOpenUrl(block.url) }) {
+                Text("打开", style = MaterialTheme.typography.labelSmall)
+            }
+        }
+
+        is ContentBlock.Link -> TextButton(
+            onClick = { onOpenUrl(block.url) },
+            modifier = Modifier.padding(horizontal = 12.dp),
+        ) {
+            Text(
+                block.text.ifBlank { block.url },
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
@@ -88,8 +149,10 @@ fun BlockView(
 fun PostImage(url: String, onClick: () -> Unit) {
     var bitmap by remember(url) { mutableStateOf<android.graphics.Bitmap?>(null) }
     var failed by remember(url) { mutableStateOf(false) }
+    // B0-3（V3）：失败可重试——attempt 进 key 触发重载（A-R2「坏图可重试占位」兑现）
+    var attempt by remember(url) { mutableIntStateOf(0) }
 
-    LaunchedEffect(url) {
+    LaunchedEffect(url, attempt) {
         val decoded = withContext(Dispatchers.IO) {
             try {
                 val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
@@ -139,11 +202,17 @@ fun PostImage(url: String, onClick: () -> Unit) {
                     .clickable(onClick = onClick),
             )
             failed -> Box(placeholder, contentAlignment = Alignment.Center) {
-                Text(
-                    "图片加载失败",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        "图片加载失败",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(onClick = {
+                        failed = false
+                        attempt++
+                    }) { Text("重试") }
+                }
             }
             else -> Box(placeholder, contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
@@ -169,6 +238,10 @@ fun FloorCard(
     applauded: Boolean,
     onApplaud: (Long) -> Unit,
     onOpenImage: (List<String>, Int) -> Unit,
+    onOpenUrl: (String) -> Unit = {},
+    onDownloadAttachment: (String, String) -> Unit = { _, _ -> },
+    onLocateQuote: (Long) -> Unit = {},
+    onReplyToQuote: (Long) -> Unit = {},
 ) {
     val blocks = remember(floor.pid, floor.contentHtml) {
         parseContentBlocks(floor.pid, floor.contentHtml)
@@ -199,16 +272,31 @@ fun FloorCard(
             )
         }
         Spacer(Modifier.height(4.dp))
-        // R6：引用块（被引用作者+摘要，语义引用样式）
+        // R6+S07：引用块整块点击=定位被引楼层；「引用回复」显式小钮=写表单动作（两语义分离）
         floor.quoteAuthor?.let { qa ->
             Column(
                 Modifier.fillMaxWidth()
                     .clip(RoundedCornerShape(6.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .padding(8.dp),
+                    .padding(8.dp)
+                    .let { m ->
+                        if (floor.quotedPid != null) m.clickable { onLocateQuote(floor.quotedPid) } else m
+                    },
             ) {
-                Text(qa, style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Medium)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(qa, style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f))
+                    if (floor.quotedPid != null) {
+                        TextButton(
+                            onClick = { onReplyToQuote(floor.quotedPid) },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            modifier = Modifier.height(24.dp),
+                        ) {
+                            Text("引用回复", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
                 floor.quoteText?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -218,30 +306,37 @@ fun FloorCard(
             Spacer(Modifier.height(4.dp))
         }
         blocks.forEach { block ->
-            BlockView(block, group, onOpenImage)
-        }
-        // R7：视频附件占位（URL 非空=有视频，外链打开）
-        floor.videoUrl?.let { vu ->
-            Row(Modifier.fillMaxWidth().padding(top = 4.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Text("▶ 视频附件（点击外链打开）",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary)
-            }
+            BlockView(block, group, onOpenImage, onOpenUrl, onDownloadAttachment)
         }
         Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
             floor.createTime?.let {
-                Text(it, style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    io.github.deserthouse.sdgun.data.repository.BoardListRepository
+                        .relativeTime(it),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             Spacer(Modifier.weight(1f))
             // G4 点赞：乐观 +1（失败/待确认回退由路由层管理 applaudedIds）
             val count = floor.applaudCount?.let { if (applauded) it + 1 else it }
-            TextButton(onClick = { onApplaud(floor.pid) }) {
+            // R5（SdEmphasizedSpring 消费）：点赞翻转触发 scale 弹跳（M3E expressive）
+            val applaudScale by androidx.compose.animation.core.animateFloatAsState(
+                targetValue = if (applauded) 1f else 0.92f,
+                animationSpec = io.github.deserthouse.sdgun.core.designsystem.SdEmphasizedSpring,
+                label = "applaudScale",
+            )
+            TextButton(
+                onClick = { onApplaud(floor.pid) },
+                // Q2 toggle：已赞（Done）再点=取消赞——仅 Pending 在途禁点（S03 禁重复）；
+                // 路由层按 applaudedIds 归属分流 Add/Cancel（WriteOps.decideApplaud）
+                enabled = applaudState.phase != WriteUiPhase.Pending,
+                modifier = Modifier.scale(applaudScale),
+            ) {
                 Text(
                     when (applaudState.phase) {
                         WriteUiPhase.Pending -> "…"
-                        WriteUiPhase.Done -> "已赞 ${count ?: ""}".trim()
+                        WriteUiPhase.Done -> if (applauded) "已赞 ${count ?: ""} · 取消".trim() else "赞 ${count ?: ""}".trim()
                         WriteUiPhase.Failed -> "赞失败"
                         WriteUiPhase.Verify -> "待核对"
                         WriteUiPhase.Idle -> "赞 ${count ?: ""}".trim()

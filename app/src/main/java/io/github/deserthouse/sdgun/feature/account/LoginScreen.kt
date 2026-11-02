@@ -1,6 +1,7 @@
 package io.github.deserthouse.sdgun.feature.account
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -69,6 +70,8 @@ fun LoginScreen(
      *  齿轮/返回被 TabShell 顶栏盖死（av11 视觉实证，U1/R4 起游客设置入口不可达）；
      *  内嵌时设置齿轮移入表单头行 */
     embedded: Boolean = false,
+    /** A5-1：注册/找回密码走 H5 容器（站方 member 页；null=不显示） */
+    onOpenUrl: ((String) -> Unit)? = null,
 ) {
     var account by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -254,6 +257,25 @@ fun LoginScreen(
                     Text("登录")
                 }
             }
+            // A5-1：游客认证入口（注册/找回=站方 H5；webview 壳承载，零账号红线不变）。
+            // 2026-11-02 装机实读修正：首版 Row 被插进 Button 内容作用域（渲染进胶囊内
+            // 不可辨）——A1-9「replace 落点语义」家族，装机读图抓出后移出 Button 块。
+            if (onOpenUrl != null) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    TextButton(onClick = {
+                        onOpenUrl?.invoke(
+                            "https://bbs.sdgun.com.cn/member.php?mod=register&mobile=2")
+                    }) { Text("注册账号") }
+                    TextButton(onClick = {
+                        onOpenUrl?.invoke(
+                            "https://bbs.sdgun.com.cn/member.php?mod=logging" +
+                                "&action=lostpasswd&mobile=2")
+                    }) { Text("找回密码") }
+                }
+            }
             Spacer(Modifier.height(20.dp))
         }
     }
@@ -278,12 +300,17 @@ private fun CaptchaImage(epoch: Long, onRefresh: () -> Unit) {
         )
         onDispose { GalleryBitmapLoader.cancel(url, reqId, target = 512) }
     }
+    // B1-10（V8）：验证码图自带白底——容器不再垫 surfaceVariant 灰底（信箱拼贴感），
+    // 改 1dp 描边+白底贴合；高度提到 88dp 让 3 字符图更饱满
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(72.dp)
+            .height(88.dp)
             .clip(MaterialTheme.shapes.small)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(
+                1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small,
+            )
             .clickable(onClick = onRefresh),
         contentAlignment = Alignment.Center,
     ) {
