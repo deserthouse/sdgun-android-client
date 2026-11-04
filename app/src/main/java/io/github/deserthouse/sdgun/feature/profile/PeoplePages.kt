@@ -302,6 +302,8 @@ fun UserProfilePage(
     state: UiState<ProfileRepository.UserProfile>,
     onBack: () -> Unit,
     onRetry: () -> Unit,
+    /** WP3/A1104-S01：AuthRequired 相位的去登录动作（null=仅返回） */
+    onLogin: (() -> Unit)? = null,
     /** relation_status（null=响应未携带→不渲染关注钮，诚实未知） */
     following: Boolean? = null,
     followState: io.github.deserthouse.sdgun.core.model.WriteUi =
@@ -330,6 +332,19 @@ fun UserProfilePage(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) { Text("加载中…", style = MaterialTheme.typography.bodyLarge) }
+
+                is UiState.AuthRequired -> Column(
+                    Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Text("登录后可查看用户资料", style = MaterialTheme.typography.bodyLarge)
+                    onLogin?.let { login ->
+                        Button(onClick = login, modifier = Modifier.padding(top = 12.dp)) {
+                            Text("去登录")
+                        }
+                    }
+                }
 
                 is UiState.RetryableError -> Column(
                     Modifier.fillMaxSize(),

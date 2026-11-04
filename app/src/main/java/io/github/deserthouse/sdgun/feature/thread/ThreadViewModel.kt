@@ -11,13 +11,13 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * 帖子页状态所有者（A24-06）：查询代际+取消+互斥分页。
+ * 帖子页状态所有者（A24-06→WP5 重构）：查询代际+取消+互斥分页。
  *
- * - 每次意图变化（切序/只看楼主/重开）推进 gen 并取消旧 Job——迟到旧结果整包丢弃；
- * - 分页互斥：同帖加载更多在途时忽略重复触发；
- * - 空尾页：原子收尾（totalPages=page，不再留在"可加载"态）；
- * - 失败/鉴权态带可执行恢复动作（retry/reload 由 UI 绑定）。
- * fetcher 注入点供 JVM 反例（乱序/双击/空尾页）。
+ * WP5/A1104-S06：尾行状态 [Footer] 单一所有权——分页失败不再占用 floorsState=Stale
+ * （旧行保留为 Data，失败语义独立在 footer=Failed，UI 单一尾行渲染重试）。
+ * WP5/A1104-S05：跳楼扫描 [jumpScan] 直取 fetchFloors typed 结果（不再轮询 UI 态
+ * /调 loadMore——Data 门把暂败扫死成 NotFound 误报），传输失败同页重试 3 次。
+ * fetcher 注入点供 JVM 反例。
  */
 class ThreadViewModel(
     private val scope: CoroutineScope,
@@ -25,7 +25,7 @@ class ThreadViewModel(
         { tid, fid -> ThreadRepository.fetchOP(tid, fid) },
     private val fetchFloors: suspend (tid: Long, page: Int, descending: Boolean, authorId: Long?) -> ThreadRepository.FloorsPage? =
         { tid, page, desc, aid -> ThreadRepository.fetchFloors(tid, page, desc, aid) },
-    /** Q1 跳楼轮询间隔（测试注入 1ms；生产 50ms） */
+    /** 跳楼轮询间隔（测试注入 1ms；生产 50ms） */
     private val jumpPollMs: Long = 50,
 ) {
 
@@ -38,10 +38,24 @@ class ThreadViewModel(
     var posterOnly by androidx.compose.runtime.mutableStateOf(false)
         private set
 
+    /** WP5/A1104-S06：尾行状态（单一所有权；floorsItems 唯一消费点） */
+    sealed class Footer {
+        object More : Footer()
+        object Loading : Footer()
+        data class Failed(val page: Int) : Footer()
+        object End : Footer()
+    }
+
+    var footer by androidx.compose.runtime.mutableStateOf<Footer>(Footer.Loading)
+        private set
+
     private var authorId: Long? = null
     private val floors = androidx.compose.runtime.mutableStateListOf<ThreadRepository.Floor>()
-    private var floorPage = 1
-    private var floorTotal = 1
+    /** 当前页/总页（internal setter private，getter public 供 JVM 反例断言） */
+    var floorPage = 1
+        private set
+    var floorTotal = 1
+        private set
     private val gen = AtomicInteger(0)
     private val paging = AtomicBoolean(false)
     private var floorsJob: Job? = null
@@ -57,6 +71,7 @@ class ThreadViewModel(
         floors.clear()
         floorPage = 1; floorTotal = 1
         authorId = null
+        footer = Footer.Loading
         opJob = scope.launch {
             val op = fetchOp(tid, fid)
             if (gen.get() != g) return@launch
@@ -85,6 +100,12 @@ class ThreadViewModel(
     /** 失败态恢复：按当前筛选重拉楼层（A24-06：失败可操作） */
     fun retryFloors(tid: Long) = restartFloors(tid)
 
+    /** WP5：Footer.Failed 的重试（重取失败页，非全量重启） */
+    fun retryFooter(tid: Long) {
+        if (footer !is Footer.Failed) return
+        loadMore(tid)
+    }
+
     private fun restartFloors(tid: Long) {
         val g = gen.incrementAndGet()
         floorsJob?.cancel()
@@ -92,14 +113,17 @@ class ThreadViewModel(
         floors.clear()
         floorPage = 1
         floorsState = UiState.InitialLoading
+        footer = Footer.Loading
         loadFloorsInternal(tid, 1, g)
     }
 
-    /** 加载更多（互斥；空尾页原子收尾） */
+    /** 加载更多（互斥；终页/空尾页零越界；Failed 重试同页） */
     fun loadMore(tid: Long) {
-        if (paging.get() || floorsState !is UiState.Data<*>) return  // A24-06：首屏在途禁翻页（反例：空尾页竞态）
+        if (paging.get() || footer is Footer.Loading) return
+        if (floorPage >= floorTotal && footer !is Footer.Failed) return  // 已知终页零越界（S05 关闭门）
         val g = gen.get()
         paging.set(true)
+        footer = Footer.Loading
         loadFloorsInternal(tid, floorPage + 1, g, onDone = { paging.set(false) })
     }
 
@@ -115,20 +139,24 @@ class ThreadViewModel(
             if (fp == null) {
                 if (page == 1) {
                     floorsState = UiState.RetryableError("楼层加载失败")
+                    footer = Footer.End
                 } else {
-                    floorsState = UiState.Stale(
-                        ThreadRepository.FloorsPage(floors.toList(), floorPage, floorTotal),
-                        "下一页加载失败，可重试",
+                    // WP5/S05：暂败不再占用 floorsState=Stale——旧行保留 Data，失败语义归 footer
+                    floorsState = UiState.Data(
+                        ThreadRepository.FloorsPage(floors.toList(), floorPage, floorTotal)
                     )
+                    footer = Footer.Failed(floorPage + 1)
                 }
             } else if (fp.floors.isEmpty()) {
                 if (page == 1) {
                     floorsState = UiState.Empty("暂无楼层")
+                    footer = Footer.End
                 } else {
                     floorTotal = floorPage  // 空尾页原子收尾：不再可加载
                     floorsState = UiState.Data(
                         ThreadRepository.FloorsPage(floors.toList(), floorPage, floorTotal)
                     )
+                    footer = Footer.End
                 }
             } else {
                 floorPage = fp.page
@@ -140,12 +168,13 @@ class ThreadViewModel(
                 floorsState = UiState.Data(
                     ThreadRepository.FloorsPage(merged, floorPage, floorTotal)
                 )
+                footer = if (floorPage >= floorTotal) Footer.End else Footer.More
             }
             onDone()
         }
     }
 
-    // ── Q1 跳楼（B2-2 与 S07 pid 定位合流；A1-5 跨页二分挂账兑现）──
+    // ── 跳楼（WP5/A1104-S05：直取 typed fetch，不再轮询 UI 态）──
 
     /** 跳楼状态：Idle / 扫描中（pid 或楼层号 + 当前进度） / 未找到 */
     sealed class JumpState {
@@ -167,8 +196,8 @@ class ThreadViewModel(
 
     /**
      * 跳转到目标楼层：已加载 → 即时定位；未加载 → 切正序+全部楼层后逐页扫描
-     * （护栏 ≤100 页），命中即定位。用户此前的倒序/只看楼主选择会被跳楼重置
-     * （跳楼定义上需要位置序，KDoc 如实披露）。
+     * （直取 fetchFloors，失败同页重试 ≤3 次，护栏 ≤100 页）。用户此前的
+     * 倒序/只看楼主选择会被跳楼重置（跳楼需要位置序，KDoc 如实披露）。
      */
     fun jumpTo(tid: Long, targetPid: Long? = null, targetFloor: Int? = null) {
         if (targetPid == null && targetFloor == null) return
@@ -181,47 +210,65 @@ class ThreadViewModel(
             }
         jumpJob?.cancel()
         jumpState = JumpState.Searching(targetPid, targetFloor, 1, 0)
-        jumpJob = scope.launch {
-            descending = false
-            posterOnly = false
-            restartFloors(tid)
-            var staleTicks = 0
-            var scanned = 0
-            while (scanned < 100) {
-                kotlinx.coroutines.delay(jumpPollMs)
-                val st = floorsState
-                when {
-                    st is UiState.InitialLoading -> continue  // 首页在途
-                    st is UiState.RetryableError || st is UiState.Empty -> {
-                        jumpState = JumpState.NotFound(targetPid, targetFloor); return@launch
-                    }
-                    st is UiState.Stale<*> -> {
-                        // 分页传输失败：稍候重试 loadMore（被 Data 门挡住则持续等）；
-                        // 持续 Stale（网络中断）→ 诚实未找到，不假称扫完
-                        if (++staleTicks > 40) {
-                            jumpState = JumpState.NotFound(targetPid, targetFloor); return@launch
-                        }
-                        loadMore(tid)
-                        continue
-                    }
-                }
-                staleTicks = 0
-                val hit = floors.firstOrNull {
-                    it.pid == targetPid || (targetFloor != null && it.floor == targetFloor)
-                }
-                if (hit != null) {
-                    jumpState = JumpState.Idle
-                    pendingLocate = hit.pid
-                    return@launch
-                }
-                if (floorPage >= floorTotal) {
-                    jumpState = JumpState.NotFound(targetPid, targetFloor); return@launch
-                }
-                loadMore(tid)
-                scanned++
-                jumpState = JumpState.Searching(targetPid, targetFloor, floorPage, floorTotal)
-            }
-            jumpState = JumpState.NotFound(targetPid, targetFloor)  // 护栏耗尽
+        jumpJob = scope.launch { jumpScan(tid, targetPid, targetFloor) }
+    }
+
+    /** WP5/S05：直取扫描（非 UI 轮询）。传回新页追加进 floors；命中即定位。 */
+    private suspend fun jumpScan(tid: Long, targetPid: Long?, targetFloor: Int?) {
+        descending = false
+        posterOnly = false
+        restartFloors(tid)
+        // WP5 修正：g 必须在 restartFloors 之后捕获（restart 自增 gen，先捕获=全程代际错配）
+        val g = gen.get()
+        // 等首屏就绪（restartFloors 是异步的）
+        var waits = 0
+        while (floorsState is UiState.InitialLoading && gen.get() == g && waits < 200) {
+            kotlinx.coroutines.delay(jumpPollMs); waits++
         }
+        if (gen.get() != g) return
+        if (floorsState !is UiState.Data<*> && floorsState !is UiState.Empty) {
+            jumpState = JumpState.NotFound(targetPid, targetFloor); return
+        }
+        // 逐页直取（首屏已含 p1；从 p2 开始）
+        var page = floorPage + 1
+        while (page <= minOf(floorTotal, 100) && gen.get() == g) {
+            jumpState = JumpState.Searching(targetPid, targetFloor, page, floorTotal)
+            // 同页重试 ≤3 次（传输失败≠真正NotFound）
+            var fp: ThreadRepository.FloorsPage? = null
+            var attempts = 0
+            while (attempts < 3 && gen.get() == g) {
+                fp = fetchFloors(tid, page, false, null)
+                if (fp != null) break
+                attempts++
+                kotlinx.coroutines.delay(jumpPollMs * 6)
+            }
+            if (gen.get() != g) return
+            if (fp == null) {
+                jumpState = JumpState.NotFound(targetPid, targetFloor); return  // 诚实：连败不假称扫完
+            }
+            if (fp.floors.isEmpty()) {
+                jumpState = JumpState.NotFound(targetPid, targetFloor); return  // 真正扫完
+            }
+            // 追加新页
+            val merged = (floors.toList() + fp.floors).distinctBy { it.pid }
+            floors.clear()
+            floors.addAll(merged)
+            floorPage = fp.page
+            floorTotal = fp.totalPages
+            floorsState = UiState.Data(
+                ThreadRepository.FloorsPage(merged, floorPage, floorTotal)
+            )
+            // 命中检查
+            val hit = floors.firstOrNull {
+                it.pid == targetPid || (targetFloor != null && it.floor == targetFloor)
+            }
+            if (hit != null) {
+                jumpState = JumpState.Idle
+                pendingLocate = hit.pid
+                return
+            }
+            page = floorPage + 1
+        }
+        jumpState = JumpState.NotFound(targetPid, targetFloor)  // 护栏耗尽/扫完
     }
 }

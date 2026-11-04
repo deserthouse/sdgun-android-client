@@ -20,6 +20,10 @@ fun MessagesPage(
     isLoading: Boolean,
     onOpenGroup: (ProfileRepository.MessageGroup) -> Unit = {},
     onOpenNotifications: () -> Unit = {},
+    /** WP6/S07：失败/鉴权态恢复动作（null=不显失败面） */
+    onRetry: (() -> Unit)? = null,
+    onGoLogin: (() -> Unit)? = null,
+    errorText: String? = null,
     modifier: Modifier = Modifier,
 ) {
     // A28-03 单一壳契约：顶栏归 TabShell（title="消息"），页内不再持有 TopAppBar
@@ -34,11 +38,24 @@ fun MessagesPage(
                 CircularProgressIndicator()
             }
         } else if (groups == null) {
-            // A28-06：fetch 失败（null）不再吞成"暂无消息"
+            // A28-06：fetch 失败不再吞成"暂无消息"；WP6/S07：给重试/重登动作
             Column(Modifier.fillMaxSize().padding(padding),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center) {
-                Text("消息加载失败，稍后重试", style = MaterialTheme.typography.bodyLarge)
+                Text(errorText ?: "消息加载失败", style = MaterialTheme.typography.bodyLarge)
+                if (errorText == "登录后可查看消息") {
+                    onGoLogin?.let { login ->
+                        Button(onClick = login, modifier = Modifier.padding(top = 12.dp)) {
+                            Text("去登录")
+                        }
+                    }
+                } else {
+                    onRetry?.let { retry ->
+                        TextButton(onClick = retry, modifier = Modifier.padding(top = 12.dp)) {
+                            Text("重试")
+                        }
+                    }
+                }
             }
         } else {
             LazyColumn(Modifier.fillMaxSize().padding(padding),

@@ -1,5 +1,6 @@
 package io.github.deserthouse.sdgun.data.repository
 
+import io.github.deserthouse.sdgun.core.model.UiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -21,6 +22,13 @@ object ProfileRepository {
         data class Ok<T>(val value: T) : PrivateResult<T>()
         object AuthExpired : PrivateResult<Nothing>()
         object Failed : PrivateResult<Nothing>()
+    }
+
+    /** WP3/A1104-S01：私有资料结果→UI 态映射（纯函数，JVM 可测； MainActivity user 页消费） */
+    fun mapUserProfileResult(r: PrivateResult<UserProfile>): UiState<UserProfile> = when (r) {
+        is PrivateResult.Ok -> UiState.Data(r.value)
+        PrivateResult.AuthExpired -> UiState.AuthRequired
+        PrivateResult.Failed -> UiState.RetryableError("资料加载失败（可能需要登录或该用户不存在）")
     }
 
     /**
@@ -267,12 +275,18 @@ object ProfileRepository {
     /**
      * 通知历史（notifyList v3，POST query p 分页；token 必需）——null=传输/解析失败。
      * ⚠️ read-may-mutate（列表读取可能触发已读上报，契约披露）：真探不做，接线保留。
+     * WP6/S08：**分类 code 契约门控**——扩展 soak 实证（2026-11-03 messages.tsx）无 code=
+     * 「通知编码不可为空」code0 拒；本客户端未知分类码→零请求（不发必败读）。
+     * code=null=受限态（调用方呈说明）；已知分类码后按 code 请求。
      */
-    suspend fun fetchNotifyList(token: String, page: Int): PrivateResult<List<NotifyRow>> =
+    suspend fun fetchNotifyList(token: String, page: Int, code: String? = null): PrivateResult<List<NotifyRow>> =
         withContext(Dispatchers.IO) {
             if (token.isBlank()) return@withContext PrivateResult.Failed
+            // WP6/S08：未知分类码=零请求（不发必败读伪装成故障）
+            if (code.isNullOrBlank()) return@withContext PrivateResult.Failed
             try {
-                val conn = URL("$NOTIFY_LIST_V3?p=$page").openConnection() as HttpURLConnection
+                val conn = URL("$NOTIFY_LIST_V3?p=$page&code=${java.net.URLEncoder.encode(code, "UTF-8")}")
+                    .openConnection() as HttpURLConnection
                 conn.requestMethod = "POST"
                 conn.connectTimeout = 12000
                 conn.readTimeout = 15000

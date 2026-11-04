@@ -104,7 +104,7 @@ class Q3PostFlowTest {
     @Test
     fun `R1 Ok 带 url 转 UPLOADED 并落服务端地址`() = runBlocking {
         var out: UploadTaskItem? = null
-        UploadQueueLogic.runTask(task(UploadState.WAITING), FakeUploadTransport(ok = true, url = "https://pic/x.jpg")) { out = it }
+        UploadQueueLogic.runTask(task(UploadState.WAITING), FakeUploadTransport(ok = true, url = "https://pic/x.jpg"), update = { out = it })
         assertEquals(UploadState.UPLOADED, out?.state)
         assertEquals("https://pic/x.jpg", out?.url)
     }
@@ -118,7 +118,7 @@ class Q3PostFlowTest {
                 override suspend fun upload(t: UploadTaskItem, onProgress: (Int) -> Unit) =
                     UploadOutcome.Ok(null)
             },
-        ) { out = it }
+            update = { out = it })
         assertEquals(UploadState.FAILED, out?.state)
         assertEquals("上传响应缺少图片地址", out?.message)
     }
@@ -126,11 +126,11 @@ class Q3PostFlowTest {
     @Test
     fun `R3 失败带原因 RUNNING 与 UPLOADED 幂等`() = runBlocking {
         var out: UploadTaskItem? = null
-        UploadQueueLogic.runTask(task(UploadState.WAITING), FakeUploadTransport(ok = false)) { out = it }
+        UploadQueueLogic.runTask(task(UploadState.WAITING), FakeUploadTransport(ok = false), update = { out = it })
         assertEquals(UploadState.FAILED, out?.state)
         assertEquals("（合成）上传失败", out?.message)
         var out2: UploadTaskItem? = null
-        UploadQueueLogic.runTask(task(UploadState.UPLOADED, "u"), FakeUploadTransport(ok = true)) { out2 = it }
+        UploadQueueLogic.runTask(task(UploadState.UPLOADED, "u"), FakeUploadTransport(ok = true), update = { out2 = it })
         assertNull(out2)  // 幂等：已上传不再推进
     }
 
@@ -160,4 +160,48 @@ class Q3PostFlowTest {
         val r = HonestUnavailableUpload.upload(task(UploadState.WAITING)) { }
         assertTrue(r is UploadOutcome.Fail)
     }
+
+    // ── WP4-A/S02：UploadQueueOwner（enqueue 即启动/阻塞计数/移除） ──
+
+    private fun ownerWith(transport: io.github.deserthouse.sdgun.feature.thread.UploadTransport) =
+        io.github.deserthouse.sdgun.feature.thread.UploadQueueOwner(
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
+            androidx.compose.runtime.mutableStateListOf(),
+            transport,
+        )
+
+    @Test
+    fun `Q1 enqueue 即启动（首次上传入口）`() = runBlocking {
+        val owner = ownerWith(FakeUploadTransport(ok = true, url = "https://pic/x.jpg"))
+        owner.enqueue(task(UploadState.WAITING, uri = "content://x"))
+        kotlinx.coroutines.delay(50)
+        assertEquals(UploadState.UPLOADED, owner.tasks.first().state)
+        assertEquals("https://pic/x.jpg", owner.tasks.first().url)
+    }
+
+    @Test
+    fun `Q2 阻塞计数 WAITING-FAILED-RUNNING 分型`() {
+        val owner = ownerWith(HonestUnavailableUpload)
+        owner.tasks.addAll(listOf(
+            UploadTaskItem("1", "a", UploadState.WAITING, uri = "content://a"),
+            UploadTaskItem("2", "b", UploadState.FAILED, message = "x"),
+        ))
+        assertTrue(owner.blockedReason()!!.contains("失败"))
+        owner.tasks.clear()
+        owner.tasks.add(UploadTaskItem("3", "c", UploadState.RUNNING))
+        assertTrue(owner.blockedReason()!!.contains("进行中"))
+        owner.tasks.clear()
+        owner.tasks.add(UploadTaskItem("4", "d", UploadState.UPLOADED, url = "u"))
+        assertNull(owner.blockedReason())
+    }
+
+    @Test
+    fun `Q3 同 uuid 幂等不入列`() = runBlocking {
+        val owner = ownerWith(FakeUploadTransport(ok = true, url = "u"))
+        owner.enqueue(UploadTaskItem("dup", "a", UploadState.WAITING, uri = "content://a"))
+        owner.enqueue(UploadTaskItem("dup", "a", UploadState.WAITING, uri = "content://a"))
+        kotlinx.coroutines.delay(50)
+        assertEquals(1, owner.tasks.size)
+    }
+
 }

@@ -41,6 +41,10 @@ object BoardListRepository {
         val isTop: Boolean,
         val isDigest: Boolean,
         val applaudCount: String?,
+        /** WP2-A：真实 des 摘要（仅服务端携带且非空；不捏造、不 subject 回退） */
+        val summary: String? = null,
+        /** WP2-A：pics 数组计数（>1 行内角标；coverUrl=首图） */
+        val picCount: Int = 0,
     )
 
     data class BoardMeta(
@@ -93,6 +97,8 @@ object BoardListRepository {
                     isTop = r.optInt("is_top", 0) > 0,
                     isDigest = r.optInt("digest", 0) > 0,
                     applaudCount = r.optString("applaud_count").takeIf { it.isNotBlank() && it != "null" },
+                    summary = r.optString("des").takeIf { it.isNotBlank() && it != "null" },
+                    picCount = r.optJSONArray("pics")?.length() ?: 0,
                 )
             }
         } catch (e: Exception) {

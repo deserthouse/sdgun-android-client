@@ -63,6 +63,8 @@ fun ThreadPage(
     onDownloadAttachment: (String, String) -> Unit = { _, _ -> },
     onLocateQuote: (Long) -> Unit = {},
     onReplyToQuote: (Long) -> Unit = {},
+    /** WP5/S06：尾行状态机（FooterTailRow 唯一渲染） */
+    footer: ThreadViewModel.Footer = ThreadViewModel.Footer.Loading,
     onShare: (String) -> Unit = {},
     /** R2/F17：举报（jadx ReportComp 同构 H5 通道：userReportView?type=14&type_value=base64(contentId)） */
     onReport: (contentId: String) -> Unit = {},
@@ -192,14 +194,12 @@ fun ThreadPage(
                     val fs = floorsState
                     val list = when (fs) {
                         is UiState.Data<*> -> (fs.value as? ThreadRepository.FloorsPage)?.floors
-                        is UiState.Stale<*> -> (fs.stale as? ThreadRepository.FloorsPage)?.floors
                         else -> null
                     } ?: return@LaunchedEffect
                     val idx = list.indexOfFirst { it.pid == target }
                     if (idx >= 0) {
-                        val banner = if (fs is UiState.Stale<*>) 1 else 0
-                        // 项序：op_head(1) + 主楼内容块 + controls(1) + 楼层（Stale 加横幅 1）
-                        floorsListState.animateScrollToItem(1 + opBlocks.size + 1 + banner + idx)
+                        // 项序：op_head(1) + 主楼内容块 + controls(1) + 楼层（WP5：Stale 横幅退役）
+                        floorsListState.animateScrollToItem(1 + opBlocks.size + 1 + idx)
                         onLocateHandled()
                     }
                 }
@@ -240,34 +240,8 @@ fun ThreadPage(
             .widthIn(max = 720.dp),
     ) {
                     item(key = "op_head") {
-                        // A1-9：原生分享（标准文本：标题+H5 链接）；tid 经 op 不可得时降级仅标题
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                            TextButton(onClick = {
-                                val opTitle = (opState as? UiState.Data<*>)?.value
-                                    as? ThreadRepository.ThreadOP
-                                val link = opTitle?.let {
-                                    " https://bbs.sdgun.com.cn/forum.php?mod=viewthread&tid=${it.tid}&mobile=2"
-                                } ?: ""
-                                onShare((opTitle?.title ?: "") + link)
-                            }) {
-                                Icon(
-                                    androidx.compose.material.icons.Icons.Filled.Share,
-                                    contentDescription = "分享",
-                                    modifier = Modifier.size(16.dp),
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text("分享", style = MaterialTheme.typography.labelMedium)
-                            }
-                            if (onReport != {}) {
-                                TextButton(onClick = {
-                                    val opv = (opState as? UiState.Data<*>)?.value
-                                        as? ThreadRepository.ThreadOP
-                                    onReport(opv?.pid?.toString() ?: "")
-                                }) {
-                                    Text("举报", style = MaterialTheme.typography.labelMedium)
-                                }
-                            }
-                        }
+                        // WP9/V03（A1104-V03）：独占分享/举报行删除——动作已并入 OpHeader
+                        // 作者行图标组（分享/举报各一份），标题层级单一化
                         OpHeader(
                             op,
                             applauded = op.pid in applaudedIds,
@@ -294,14 +268,47 @@ fun ThreadPage(
                             jumpStatus = jumpState,
                         )
                     }
-                    floorsItems(floorsState, applaudStates, applaudedIds, onApplaud, onRetryFloors, onLoadMore, openViewer, onOpenUrl, onDownloadAttachment, onLocateQuote, onReplyToQuote)
-                    moreItem(floorsState, onLoadMore)
+                    floorsItems(floorsState, applaudStates, applaudedIds, onApplaud, onRetryFloors, onLoadMore, openViewer, onOpenUrl, onDownloadAttachment, onLocateQuote, onReplyToQuote, footer)
                 }
                 }
             }
 
             else -> {}
         }
+    }
+}
+
+/** WP5/S06：唯一分页尾行（More/Loading/Failed 重试/End 四态；取代旧双注册 key="more"） */
+@Composable
+private fun FooterTailRow(
+    footer: ThreadViewModel.Footer,
+    onRetry: () -> Unit,
+    onLoadMore: () -> Unit,
+) {
+    when (val f = footer) {
+        ThreadViewModel.Footer.More -> TextButton(
+            onClick = onLoadMore,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("加载更多楼层") }
+
+        ThreadViewModel.Footer.Loading -> Row(
+            Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.Center,
+        ) { CircularProgressIndicator(Modifier.height(22.dp), strokeWidth = 2.dp) }
+
+        is ThreadViewModel.Footer.Failed -> Column(
+            Modifier.fillMaxWidth().padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text("第 ${f.page} 页加载失败", style = MaterialTheme.typography.bodyMedium)
+            TextButton(onClick = onRetry, modifier = Modifier.padding(top = 8.dp)) {
+                Text("重试")
+            }
+        }
+
+        ThreadViewModel.Footer.End -> {}
+
+        else -> {}
     }
 }
 
@@ -361,6 +368,7 @@ private fun LazyListScope.floorsItems(
     onDownloadAttachment: (String, String) -> Unit = { _, _ -> },
     onLocateQuote: (Long) -> Unit = {},
     onReplyToQuote: (Long) -> Unit = {},
+    footer: ThreadViewModel.Footer = ThreadViewModel.Footer.Loading,
 ) {
     when (val fs = floorsState) {
         is UiState.InitialLoading -> item(key = "floors_loading") {
@@ -398,13 +406,9 @@ private fun LazyListScope.floorsItems(
 
         is UiState.Data<ThreadRepository.FloorsPage> -> {
             floorEntries(fs.value, applaudStates, applaudedIds, onApplaud, onOpenImage, onOpenUrl, onDownloadAttachment, onLocateQuote, onReplyToQuote)
-            // R1：more 行不随筛选消失（挂在分支尾，page<totalPages 才显示）
-            if (fs.value.page < fs.value.totalPages) {
-                item(key = "more") {
-                    TextButton(onClick = onLoadMore, modifier = Modifier.fillMaxWidth()) {
-                        Text("加载更多楼层")
-                    }
-                }
+            // WP5/S06：单一尾行（Footer 状态机唯一消费点——旧双注册 key="more" 崩溃路径根除）
+            item(key = "more") {
+                FooterTailRow(footer = footer, onRetry = onRetryFloors, onLoadMore = onLoadMore)
             }
         }
 
@@ -428,20 +432,6 @@ private fun LazyListScope.floorEntries(
     }
 }
 
-/** 下一页入口：仓库 total_page 权威；只看楼主下同样可用（A70-04 反例=筛选隐藏分页）。 */
-private fun LazyListScope.moreItem(
-    floorsState: UiState<ThreadRepository.FloorsPage>,
-    onLoadMore: () -> Unit,
-) {
-    val fp = (floorsState as? UiState.Data<ThreadRepository.FloorsPage>)?.value ?: return
-    if (fp.page < fp.totalPages) {
-        item(key = "more") {
-            TextButton(onClick = onLoadMore, modifier = Modifier.fillMaxWidth()) {
-                Text("加载更多楼层")
-            }
-        }
-    }
-}
 
 @Composable
 private fun OpHeader(

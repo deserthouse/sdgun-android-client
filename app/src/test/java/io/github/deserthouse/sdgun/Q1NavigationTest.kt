@@ -176,4 +176,48 @@ class Q1NavigationTest {
         awaitJumpDone(vm)
         assertEquals(21L, vm.pendingLocate)  // p2 的首个 pid=21（pid=p*10+i），floor=4
     }
+
+    // ── WP1-A（A1104-U01）：官方 app/mag1 域帖页 host+path 双门 ──
+
+    @Test
+    fun `P1 app 域 threadViewPage 解析为 Thread`() {
+        assertEquals(
+            Target.Thread(392675L, null),
+            TargetParser.parse("https://app.sdgun.com.cn/mag/circle/v1/forum/threadViewPage?tid=392675&circle_id="),
+        )
+        assertEquals(
+            Target.Thread(42L, null),
+            TargetParser.parse("https://mag1.sdgun.net/mag/circle/v1/forum/threadWapPage?tid=42"),
+        )
+    }
+
+    @Test
+    fun `P2 官方域非帖路径保持 Web（host+path 双门）`() {
+        val u1 = "https://app.sdgun.com.cn/mag/user/v1/User/userSearch?name=x"
+        assertEquals(Target.Web(u1), TargetParser.parse(u1))
+        val u2 = "https://mag1.sdgun.net/mag/circle/v1/show/allTopicSearch?keyword=x"
+        assertEquals(Target.Web(u2), TargetParser.parse(u2))
+    }
+
+    @Test
+    fun `P3 bbs 伪静态 thread-N 与 t-N 短链解析`() {
+        assertEquals(Target.Thread(42L, null),
+            TargetParser.parse("https://bbs.sdgun.com.cn/thread-42-1-1.html"))
+        assertEquals(Target.Thread(42L, null),
+            TargetParser.parse("https://bbs.sdgun.com.cn/t-42.html"))
+    }
+
+    @Test
+    fun `P4 外站同形伪静态不误路由`() {
+        val u = "https://evil.example.com/t-42.html"
+        assertEquals(Target.Web(u), TargetParser.parse(u))
+        assertEquals(Target.Web("https://x.org/thread-9-1-1.html"),
+            TargetParser.parse("https://x.org/thread-9-1-1.html"))
+    }
+
+    @Test
+    fun `P5 伪静态第二段页码不采为 pid`() {
+        assertEquals(Target.Thread(42L, null),
+            TargetParser.parse("https://bbs.sdgun.com.cn/thread-42-3-2.html"))
+    }
 }

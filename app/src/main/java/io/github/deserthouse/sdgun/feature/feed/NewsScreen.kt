@@ -63,6 +63,8 @@ import kotlinx.coroutines.launch
 fun NewsScreen(
     onBack: () -> Unit,
     onOpenLink: (String) -> Unit,
+    /** WP1-A：帖目标原生路由（route news 的调用方接 navController） */
+    onOpenThread: ((Long, Long?) -> Unit)? = null,
 ) {
     var items by remember { mutableStateOf(NewsRepository.cached(1) ?: emptyList()) }
     var firstLoading by remember { mutableStateOf(items.isEmpty()) }
@@ -185,7 +187,18 @@ fun NewsScreen(
                         }
                     }
                     items(items, key = { it.id }) { item ->
-                        NewsCard(item) { onOpenLink(item.link) }
+                        NewsCard(item, enabled = item.target != null) {
+                            when (val t = item.target) {
+                                is io.github.deserthouse.sdgun.data.repository.FeedTarget.Thread ->
+                                    onOpenThread?.invoke(t.tid, t.pid)
+                                        ?: onOpenLink(item.link)  // 无路由回调=退旧链
+                                is io.github.deserthouse.sdgun.data.repository.FeedTarget.Article ->
+                                    onOpenLink(t.url)
+                                is io.github.deserthouse.sdgun.data.repository.FeedTarget.External ->
+                                    onOpenLink(t.url)
+                                null -> {}
+                            }
+                        }
                     }
                     item {
                         Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
@@ -212,7 +225,7 @@ fun NewsScreen(
 }
 
 @Composable
-private fun NewsCard(item: NewsItem, onClick: () -> Unit) {
+private fun NewsCard(item: NewsItem, enabled: Boolean = true, onClick: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()

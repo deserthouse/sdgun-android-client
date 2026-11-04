@@ -1,5 +1,7 @@
 package io.github.deserthouse.sdgun.feature.thread
 
+import androidx.compose.runtime.saveable.Saver
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -247,10 +249,12 @@ object UploadQueueLogic {
         task: UploadTaskItem,
         transport: UploadTransport,
         update: (UploadTaskItem) -> Unit,
+        /** WP4-A/S02：进度百分比（未传=静默） */
+        onProgress: (Int) -> Unit = {},
     ) {
         if (task.state == UploadState.RUNNING || task.state == UploadState.UPLOADED) return
         update(task.copy(state = UploadState.RUNNING, message = null))
-        val outcome = transport.upload(task) { }
+        val outcome = transport.upload(task) { pct -> onProgress(pct) }
         update(
             when (outcome) {
                 is UploadOutcome.Ok ->
@@ -273,6 +277,101 @@ object UploadQueueLogic {
         if (uploaded.isEmpty()) return content
         val lines = uploaded.joinToString("\n") { "[附件] ${it.name} ${it.url}" }
         return content.trimEnd() + "\n\n" + lines
+    }
+}
+
+/** WP4-A/S02：任务恢复 Saver（进程/配置重建后 URI/进度态保留；RUNNING→WAITING 待补启） */
+val UploadTasksSaver: androidx.compose.runtime.saveable.Saver<
+    androidx.compose.runtime.snapshots.SnapshotStateList<UploadTaskItem>, List<List<String>>> =
+    androidx.compose.runtime.saveable.Saver(
+        save = { list ->
+            list.map {
+                listOf(it.uuid, it.name, it.state.name,
+                    it.message ?: " ", it.url ?: " ", it.uri ?: " ")
+            }
+        },
+        restore = { rows ->
+            val restored = androidx.compose.runtime.mutableStateListOf<UploadTaskItem>()
+            restored.apply {
+                rows.forEach { r ->
+                    add(
+                        UploadTaskItem(
+                            uuid = r[0], name = r[1],
+                            state = if (r[2] == "RUNNING") UploadState.WAITING
+                            else UploadState.valueOf(r[2]),
+                            message = r[3].takeIf { it != " " },
+                            url = r[4].takeIf { it != " " },
+                            uri = r[5].takeIf { it != " " },
+                        ))
+                }
+            }
+        },
+    )
+
+/**
+ * WP4-A/A1104-S02：上传队列所有者——enqueue 即自动启动（旧实现 WAITING 无调度=首次上传不可达）。
+ * jobs 按 uuid 管理（取消/重试幂等）；阻塞计数供发布门显因。
+ * transport 注入（合成关闭制：fake 全链零触网）。
+ */
+class UploadQueueOwner(
+    private val scope: kotlinx.coroutines.CoroutineScope,
+    val tasks: androidx.compose.runtime.snapshots.SnapshotStateList<UploadTaskItem>,
+    private val transport: UploadTransport,
+) {
+    private val jobs = mutableMapOf<String, kotlinx.coroutines.Job>()
+
+    /** 选图入口：入列即启动（幂等：同 uuid 不重入） */
+    fun enqueue(task: UploadTaskItem) {
+        if (tasks.any { it.uuid == task.uuid }) return
+        tasks.add(task)
+        start(task.uuid)
+    }
+
+    /** FAILED 重试 / WAITING 手动补启（RUNNING/UPLOADED 幂等跳过） */
+    fun retry(uuid: String) {
+        val t = tasks.firstOrNull { it.uuid == uuid } ?: return
+        if (t.state == UploadState.RUNNING || t.state == UploadState.UPLOADED) return
+        jobs[uuid]?.cancel()
+        jobs[uuid] = scope.launch {
+            io.github.deserthouse.sdgun.feature.thread.UploadQueueLogic.runTask(
+                t, transport,
+                { upd -> val idx = tasks.indexOfFirst { it.uuid == upd.uuid }; if (idx >= 0) tasks[idx] = upd },
+                { pct -> updateMessage(uuid, "$pct%") },
+            )
+            jobs.remove(uuid)
+        }
+    }
+
+    private fun start(uuid: String) = retry(uuid)
+
+    /** 移除（在途先取消——离开面板/删除资源零迟到回填） */
+    fun remove(uuid: String) {
+        jobs[uuid]?.cancel()
+        jobs.remove(uuid)
+        tasks.removeAll { it.uuid == uuid }
+    }
+
+    fun cancelAll() {
+        jobs.values.forEach { it.cancel() }
+        jobs.clear()
+    }
+
+    private fun updateMessage(uuid: String, msg: String) {
+        val idx = tasks.indexOfFirst { it.uuid == uuid }
+        if (idx >= 0) tasks[idx] = tasks[idx].copy(message = msg)
+    }
+
+    /** 发布门：非空阻塞原因（null=可发布）——WAITING/FAILED 双层拦截（S02 关闭门） */
+    fun blockedReason(): String? {
+        val waiting = tasks.count { it.state == UploadState.WAITING }
+        val running = tasks.count { it.state == UploadState.RUNNING }
+        val failed = tasks.count { it.state == UploadState.FAILED }
+        return when {
+            running > 0 -> "附件传输进行中（$running 张），请等待或移除附件"
+            failed > 0 -> "有 $failed 张附件上传失败，请重试或移除后再发布"
+            waiting > 0 -> "有 $waiting 张附件待上传，请稍候或移除"
+            else -> null
+        }
     }
 }
 
@@ -491,8 +590,13 @@ fun ThreadPostSheet(
                     localError.value = when {
                         title.isBlank() -> "请填写标题"
                         content.isBlank() -> "请填写正文"
+                        // WP4-A/S02：双层门（RUNNING/WAITING/FAILED 全拦+显因；移除后才继续）
                         uploadTasks.any { it.state == UploadState.RUNNING } ->
                             "附件传输进行中，请等待或移除附件"
+                        uploadTasks.any { it.state == UploadState.WAITING } ->
+                            "有 ${uploadTasks.count { it.state == UploadState.WAITING }} 张附件待上传，请稍候或移除"
+                        uploadTasks.any { it.state == UploadState.FAILED } ->
+                            "有 ${uploadTasks.count { it.state == UploadState.FAILED }} 张附件上传失败，请重试或移除后再发布"
                         else -> null
                     }
                     if (localError.value == null) onSubmit(title.trim(), content, selectedTypeId)

@@ -54,7 +54,7 @@ object TargetParser {
         }
     }
 
-    /** https bbs 帖/用户/板块三形态；**host 校验失败一律 Web**（防外站同形参数误路由）；其余 → Web */
+    /** https bbs 帖/用户/板块三形态；官方 app/mag1 域帖页 host+path 双门；**host 校验失败一律 Web**（防外站同形参数误路由）；其余 → Web */
     private fun parseWeb(rawUrl: String): Target? {
         // 锚点先摘（#pidN 可出现在 query 之后，不清掉会让 tid 解析失败）
         val fragIdx = rawUrl.indexOf('#')
@@ -62,12 +62,35 @@ object TargetParser {
         val url = if (fragIdx >= 0) rawUrl.substring(0, fragIdx) else rawUrl
         val afterScheme = url.substringAfter("//")
         val host = afterScheme.substringBefore('/').lowercase()
-        // 仅站方论坛域参与原生升级（sdgun.com.cn 及其子域）
-        if (!(host == "bbs.sdgun.com.cn" || host.endsWith(".sdgun.com.cn"))) return Target.Web(rawUrl)
+        // WP1-A（A1104-U01）host+path 双门：
+        // - bbs 论坛域（.sdgun.com.cn）：既有三形态 + 伪静态短链
+        // - app/mag1 官方 API 域：**仅**帖页路径升级（threadViewPage/threadWapPage）；
+        //   域内其余路径（userSearch/allTopicSearch 等）不收——防整域误路由
+        val isBbs = host == "bbs.sdgun.com.cn" || host.endsWith(".sdgun.com.cn")
+        val isOfficialApi = host == "app.sdgun.com.cn" || host == "mag1.sdgun.net"
+        if (!isBbs && !isOfficialApi) return Target.Web(rawUrl)
         val q = url.indexOf('?')
         val path = afterScheme.substringAfter('/').substringBefore('?')
         val lowerPath = path.lowercase()
         val params = parseQuery(if (q >= 0) url.substring(q + 1) else "")
+        // 官方 API 域：帖页双形态（threadViewPage / threadWapPage——小写后缀分别为
+        // threadviewpage / threadwappage），query tid>0；circle_id 不猜 fid——路由沿用 thread/{tid}/0
+        if (isOfficialApi) {
+            if (lowerPath.endsWith("threadviewpage") || lowerPath.endsWith("threadwappage")) {
+                val tid = params["tid"]?.toLongOrNull()?.takeIf { it > 0 } ?: return Target.Web(rawUrl)
+                val pid = params["pid"]?.toLongOrNull()?.takeIf { it > 0 }
+                return Target.Thread(tid, pid)
+            }
+            return Target.Web(rawUrl)
+        }
+        // WP1-A：bbs 伪静态短链（thread-42-1-1.html / t-42.html）——第一段数字=tid，
+        // thread-N-X-X 的后续段为页码/页内序，不采为 pid
+        Regex("""(?:^|/)thread-(\d+)(?:-\d+-\d+)?\.html""", RegexOption.IGNORE_CASE).find(path)
+            ?.groupValues?.get(1)?.toLongOrNull()?.takeIf { it > 0 }
+            ?.let { return Target.Thread(it, null) }
+        Regex("""(?:^|/)t-(\d+)\.html""", RegexOption.IGNORE_CASE).find(path)
+            ?.groupValues?.get(1)?.toLongOrNull()?.takeIf { it > 0 }
+            ?.let { return Target.Thread(it, null) }
         if (lowerPath.contains("forum.php") && params["mod"]?.lowercase() == "viewthread") {
             val tid = params["tid"]?.toLongOrNull()?.takeIf { it > 0 } ?: return Target.Web(rawUrl)
             // pid 源：显式 ?pid= 或锚点 #pidN（站方楼层锚形态）

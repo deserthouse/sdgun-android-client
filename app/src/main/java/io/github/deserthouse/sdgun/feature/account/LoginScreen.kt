@@ -113,17 +113,8 @@ fun LoginScreen(
                 .padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            if (embedded && onOpenSettings != null) {
-                // 内嵌齿轮：游客设置唯一入口（顶栏不可用时的替代位）
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Outlined.Settings, contentDescription = "设置")
-                    }
-                }
-            }
+            // WP9/V01（A1104-V01）：embedded 内齿轮退役——TabShell 顶栏齿轮已为
+            // 唯一设置入口（双齿轮=设置动作重复），空间让给内容
             Spacer(Modifier.height(12.dp))
             Text(
                 "登录 SDGun 社区账号",

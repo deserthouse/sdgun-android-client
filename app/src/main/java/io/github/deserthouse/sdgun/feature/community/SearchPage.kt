@@ -44,6 +44,59 @@ import kotlinx.coroutines.launch
  * 帖子全文搜索官方无 API（api_survey 定案）——页内给站内 H5 搜索入口（诚实桥接）。
  * fetch 函数注入（JVM 可测由 Repository 纯函数承担；本页=组装+状态）。
  */
+
+/**
+ * WP3/A1104-S04：搜索状态所有者——新意图取消旧请求 + seq 复核（晚结果不覆盖新意图）。
+ * fetch 函数注入（JVM 反例：A 慢返回不覆盖 B）。
+ */
+class SearchOwner(private val scope: kotlinx.coroutines.CoroutineScope) {
+    var mode by androidx.compose.runtime.mutableStateOf(0)  // 0=圈子 1=用户
+    var query by androidx.compose.runtime.mutableStateOf("")
+    var topics by androidx.compose.runtime.mutableStateOf<UiState<List<BoardListRepository.TopicSearchRow>>>(
+        UiState.Empty("输入关键词搜索圈子"))
+    var users by androidx.compose.runtime.mutableStateOf<UiState<List<ProfileRepository.PersonItem>>>(
+        UiState.Empty("输入关键词搜索用户"))
+
+    private var job: kotlinx.coroutines.Job? = null
+    private val seq = java.util.concurrent.atomic.AtomicInteger(0)
+
+    fun search(
+        searchTopics: suspend (String) -> List<BoardListRepository.TopicSearchRow>?,
+        searchUsers: suspend (String) -> List<ProfileRepository.PersonItem>?,
+    ) {
+        val kw = query.trim()
+        if (kw.isBlank()) return
+        val mySeq = seq.incrementAndGet()
+        job?.cancel()
+        when (mode) {
+            0 -> {
+                topics = UiState.InitialLoading
+                job = scope.launch {
+                    val r = searchTopics(kw)
+                    if (seq.get() != mySeq) return@launch  // 晚结果丢弃（WP3 反例）
+                    topics = when (r) {
+                        null -> UiState.RetryableError("圈子搜索失败，可重试")
+                        else -> if (r.isEmpty()) UiState.Empty("未找到相关圈子")
+                        else UiState.Data(r)
+                    }
+                }
+            }
+            1 -> {
+                users = UiState.InitialLoading
+                job = scope.launch {
+                    val r = searchUsers(kw)
+                    if (seq.get() != mySeq) return@launch
+                    users = when (r) {
+                        null -> UiState.RetryableError("用户搜索失败，可重试")
+                        else -> if (r.isEmpty()) UiState.Empty("未找到相关用户")
+                        else UiState.Data(r)
+                    }
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchPage(
@@ -53,42 +106,10 @@ fun SearchPage(
     searchTopics: suspend (String) -> List<BoardListRepository.TopicSearchRow>?,
     searchUsers: suspend (String) -> List<ProfileRepository.PersonItem>?,
 ) {
-    var mode by remember { mutableStateOf(0) }  // 0=圈子 1=用户
-    var query by remember { mutableStateOf("") }
-    var topicsState by remember {
-        mutableStateOf<UiState<List<BoardListRepository.TopicSearchRow>>>(UiState.Empty("输入关键词搜索圈子"))
-    }
-    var usersState by remember {
-        mutableStateOf<UiState<List<ProfileRepository.PersonItem>>>(UiState.Empty("输入关键词搜索用户"))
-    }
-    val scope = rememberCoroutineScope()
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val owner = remember { SearchOwner(scope) }
 
-    fun runSearch() {
-        val kw = query.trim()
-        if (kw.isBlank()) return
-        when (mode) {
-            0 -> {
-                topicsState = UiState.InitialLoading
-                scope.launch {
-                    topicsState = when (val r = searchTopics(kw)) {
-                        null -> UiState.RetryableError("圈子搜索失败，可重试")
-                        else -> if (r.isEmpty()) UiState.Empty("未找到相关圈子")
-                        else UiState.Data(r)
-                    }
-                }
-            }
-            1 -> {
-                usersState = UiState.InitialLoading
-                scope.launch {
-                    usersState = when (val r = searchUsers(kw)) {
-                        null -> UiState.RetryableError("用户搜索失败，可重试")
-                        else -> if (r.isEmpty()) UiState.Empty("未找到相关用户")
-                        else UiState.Data(r)
-                    }
-                }
-            }
-        }
-    }
+    fun runSearch() = owner.search(searchTopics, searchUsers)
 
     Scaffold(
         topBar = {
@@ -107,21 +128,21 @@ fun SearchPage(
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
+                value = owner.query,
+                onValueChange = { owner.query = it },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-                label = { Text(if (mode == 0) "搜索圈子" else "搜索用户") },
+                label = { Text(if (owner.mode == 0) "搜索圈子" else "搜索用户") },
                 singleLine = true,
                 trailingIcon = {
-                    TextButton(onClick = { runSearch() }, enabled = query.isNotBlank()) { Text("搜索") }
+                    TextButton(onClick = { runSearch() }, enabled = owner.query.isNotBlank()) { Text("搜索") }
                 },
             )
-            TabRow(selectedTabIndex = mode) {
-                Tab(selected = mode == 0, onClick = { mode = 0 }, text = { Text("圈子") })
-                Tab(selected = mode == 1, onClick = { mode = 1 }, text = { Text("用户") })
+            TabRow(selectedTabIndex = owner.mode) {
+                Tab(selected = owner.mode == 0, onClick = { owner.mode = 0 }, text = { Text("圈子") })
+                Tab(selected = owner.mode == 1, onClick = { owner.mode = 1 }, text = { Text("用户") })
             }
-            when (mode) {
-                0 -> when (val st = topicsState) {
+            when (owner.mode) {
+                0 -> when (val st = owner.topics) {
                     is UiState.InitialLoading -> Column(
                         Modifier.fillMaxSize().padding(16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -144,21 +165,18 @@ fun SearchPage(
                             ListItem(
                                 headlineContent = { Text(row.name) },
                                 supportingContent = { row.link?.let { Text(it, maxLines = 1) } },
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                        item(key = "topic_hint") {
-                            Text(
-                                "圈子行点击经链接打开（站方板块链接自动升级原生页）",
-                                Modifier.padding(16.dp),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                // WP3/A1104-S04：圈行真实点击（link→openLink 链=TargetParser 原生升级）；
+                                // 缺 link 诚实禁点
+                                modifier = Modifier.fillMaxWidth()
+                                    .clickable(enabled = row.link != null) {
+                                        row.link?.let(onOpenUrl)
+                                    },
                             )
                         }
                     }
                     else -> {}
                 }
-                1 -> when (val st = usersState) {
+                1 -> when (val st = owner.users) {
                     is UiState.InitialLoading -> Column(
                         Modifier.fillMaxSize().padding(16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,

@@ -65,7 +65,7 @@ fun FocusPage(
     channels: List<FocusChannel>,
     currentChannel: FocusChannel,
     onChannelSelect: (FocusChannel) -> Unit,
-    onOpenLink: (String) -> Unit,
+    onOpenTarget: (io.github.deserthouse.sdgun.data.repository.FeedTarget?) -> Unit,
     onRetry: () -> Unit,
     hasMore: Boolean,
     loadingMore: Boolean,
@@ -77,7 +77,7 @@ fun FocusPage(
     key(currentChannel) {
         FocusFeed(
             state = state, currentChannel = currentChannel, channels = channels,
-            onChannelSelect = onChannelSelect, onOpenLink = onOpenLink, onRetry = onRetry,
+            onChannelSelect = onChannelSelect, onOpenTarget = onOpenTarget, onRetry = onRetry,
             hasMore = hasMore, loadingMore = loadingMore, onLoadMore = onLoadMore,
             modifier = modifier,
         )
@@ -90,7 +90,7 @@ private fun FocusFeed(
     currentChannel: FocusChannel,
     channels: List<FocusChannel>,
     onChannelSelect: (FocusChannel) -> Unit,
-    onOpenLink: (String) -> Unit,
+    onOpenTarget: (io.github.deserthouse.sdgun.data.repository.FeedTarget?) -> Unit,
     onRetry: () -> Unit,
     hasMore: Boolean,
     loadingMore: Boolean,
@@ -148,7 +148,7 @@ private fun FocusFeed(
             ) {
                 FeedList(
                     items = @Suppress("UNCHECKED_CAST") (s as UiState.Data<List<NewsItem>>).value,
-                    stale = null, onOpenLink = onOpenLink, padding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                    stale = null, onOpenTarget = onOpenTarget, padding = androidx.compose.foundation.layout.PaddingValues(0.dp),
                     hasMore = hasMore, loadingMore = loadingMore, onLoadMore = onLoadMore,
                     listState = listState,
                 )
@@ -156,14 +156,14 @@ private fun FocusFeed(
 
             is UiState.Refreshing<*> -> FeedList(
                 items = @Suppress("UNCHECKED_CAST") (s as UiState.Refreshing<List<NewsItem>>).stale,
-                stale = null, onOpenLink = onOpenLink, padding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                stale = null, onOpenTarget = onOpenTarget, padding = androidx.compose.foundation.layout.PaddingValues(0.dp),
                 hasMore = hasMore, loadingMore = loadingMore, onLoadMore = onLoadMore,
                 listState = listState,
             )
 
             is UiState.Stale<*> -> FeedList(
                 items = @Suppress("UNCHECKED_CAST") (s as UiState.Stale<List<NewsItem>>).stale,
-                stale = s.error, onOpenLink = onOpenLink, padding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                stale = s.error, onOpenTarget = onOpenTarget, padding = androidx.compose.foundation.layout.PaddingValues(0.dp),
                 hasMore = hasMore, loadingMore = loadingMore, onLoadMore = onLoadMore,
                 listState = listState,
             )
@@ -176,7 +176,7 @@ private fun FocusFeed(
 private fun FeedList(
     items: List<NewsItem>,
     stale: String?,
-    onOpenLink: (String) -> Unit,
+    onOpenTarget: (io.github.deserthouse.sdgun.data.repository.FeedTarget?) -> Unit,
     padding: androidx.compose.foundation.layout.PaddingValues,
     hasMore: Boolean,
     loadingMore: Boolean,
@@ -208,7 +208,9 @@ private fun FeedList(
             }
         }
         items(items, key = { it.id }) { item ->
-            FeedCard(item) { onOpenLink(item.link) }
+            FeedCard(item, enabled = item.target != null) {
+                item.target?.let(onOpenTarget)
+            }
         }
         if (hasMore) {
             item(key = "load_more") {
@@ -225,9 +227,10 @@ private fun FeedList(
 }
 
 @Composable
-private fun FeedCard(item: NewsItem, onClick: () -> Unit) {
+private fun FeedCard(item: NewsItem, enabled: Boolean = true, onClick: () -> Unit) {
     Card(
         onClick = onClick,
+        enabled = enabled,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
     ) {
         Column(Modifier.padding(12.dp)) {

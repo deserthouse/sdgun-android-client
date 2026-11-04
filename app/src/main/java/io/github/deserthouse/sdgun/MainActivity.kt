@@ -374,7 +374,24 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                     channels = FocusChannel.entries.toList(),
                     currentChannel = channel,
                     onChannelSelect = { ch -> channel = ch; vm.select(ch) },
-                    onOpenLink = { url -> openLink(url) },
+                    onOpenTarget = { target ->
+                    when (target) {
+                        is io.github.deserthouse.sdgun.data.repository.FeedTarget.Thread ->
+                            navController.navigate(
+                                "thread/${target.tid}/0" + (target.pid?.let { "?pid=$it" } ?: "")) {
+                                launchSingleTop = true
+                            }
+                        is io.github.deserthouse.sdgun.data.repository.FeedTarget.Article ->
+                            navController.navigate(
+                                "h5/${Uri.encode("文章")}?url=${Uri.encode(target.url)}")
+                        is io.github.deserthouse.sdgun.data.repository.FeedTarget.External ->
+                            runCatching {
+                                appContext.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(target.url)))
+                            }
+                        null -> {}
+                    }
+                },
                     onRetry = { vm.load(channel) },
                     hasMore = vm.hasMore(channel),
                     loadingMore = vm.loadingMore(channel),
@@ -439,7 +456,12 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                 var postState by remember(fid) {
                     mutableStateOf<MutationState>(MutationState.Draft)
                 }
-                val uploadTasks = remember(fid) {
+                // WP4-A/S03：草稿修订号（在途期间新键入使 rev 前移→成功不清洗新输入）
+                var postDraftRev by remember(fid) { mutableIntStateOf(0) }
+                // WP4-A/S02：任务恢复（进程/配置重建后按 URI 保留，RUNNING→WAITING 待补启）
+                val uploadTasks = androidx.compose.runtime.saveable.rememberSaveable(
+                    fid, saver = io.github.deserthouse.sdgun.feature.thread.UploadTasksSaver,
+                ) {
                     mutableStateListOf<io.github.deserthouse.sdgun.feature.thread.UploadTaskItem>()
                 }
                 // Q3：column-info（circle_id 服务端换取[fid≠circle_id]+分类 types；
@@ -465,11 +487,17 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                         io.github.deserthouse.sdgun.feature.thread.HttpUploadTransport(
                             mutContext, postToken)
                     } else io.github.deserthouse.sdgun.feature.thread.HonestUnavailableUpload
+                // WP4-A/S02：队列所有者（enqueue 即启动；transport 随登录态重建）
+                val uploadOwner = remember(fid, postToken) {
+                    io.github.deserthouse.sdgun.feature.thread.UploadQueueOwner(
+                        postScope, uploadTasks, uploadTransport)
+                }
                 val pickImages = androidx.activity.compose.rememberLauncherForActivityResult(
                     androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia(4),
                 ) { uris ->
                     uris.forEach { u ->
-                        uploadTasks.add(
+                        // WP4-A/S02：入列即启动（旧实现只 add WAITING=首次上传不可达）
+                        uploadOwner.enqueue(
                             io.github.deserthouse.sdgun.feature.thread.UploadTaskItem(
                                 uuid = java.util.UUID.randomUUID().toString(),
                                 name = u.lastPathSegment ?: "image",
@@ -504,6 +532,8 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                     io.github.deserthouse.sdgun.feature.thread.ThreadPostSheet(
                         boardName = bvm.meta?.name ?: fallbackName,
                         authed = postToken.isNotBlank(),
+                        // W0（A1104-V04）：游客 CTA 接回——Q3 重写时 onLogin 漏传致「去登录」不可达
+                        onLogin = { navController.navigate("login") },
                         submitting = postState is MutationState.Submitting,
                         mutationState = postState,
                         initialTitle = io.github.deserthouse.sdgun.data.repository.DraftStore
@@ -513,6 +543,7 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                         onDraftChange = { t, c ->
                             io.github.deserthouse.sdgun.data.repository.DraftStore
                                 .savePost(mutContext, draftOwner, fid, t, c)
+                            postDraftRev++  // WP4-A/S03：修订计数（成功清稿按提交时修订判定）
                         },
                         onDismiss = { postOpen = false },
                         onSubmit = { title, content, typeId ->
@@ -531,13 +562,21 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                                 circleId = colInfo?.circleId ?: if (fakeActive) fid else 0L,
                                 typeId = typeId,
                             )
+                            // WP4-A/S03：在途互斥（双击/键盘触发/关开面板请求=1）——
+                            // lambda 无隐式标签，用 if/else 吞掉重复触发
+                            if (postState is MutationState.Submitting) {
+                                // 吞掉
+                            } else {
                             val token = postToken
+                            val submittedRev = postDraftRev
                             when {
                                 token.isBlank() -> postState = MutationState.Rejected("请先登录")
                                 // fake 模式旁路（与按钮门同口径）：全合成语义不查真 column-info
                                 colInfo == null && !fakeActive -> postState =
                                     MutationState.Rejected("板块参数未就绪，请重试获取")
                                 else -> postScope.launch {
+                                    // 同步占位 Submitting（旧实现未接 onState=按钮终态前恒可点）
+                                    postState = MutationState.Submitting
                                     val epoch = io.github.deserthouse.sdgun.core.session
                                         .SessionManager.store.epoch.value
                                     val st = io.github.deserthouse.sdgun.core.mutation
@@ -550,13 +589,17 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                                             postGateway, epoch,
                                             { captured -> io.github.deserthouse.sdgun.core.session
                                                 .SessionManager.store.epoch.isCurrent(captured) },
+                                            onState = { s -> postState = s },
                                         )
                                     postState = st
                                     if (st is MutationState.Confirmed) {
-                                        // Q3 成功定位：清稿+关面板+刷新板块+（响应含 tid 时）直达新帖
-                                        io.github.deserthouse.sdgun.data.repository.DraftStore
-                                            .clearPost(mutContext, draftOwner, fid)
-                                        uploadTasks.clear()
+                                        // Q3 成功定位：关面板+刷新板块+（响应含 tid 时）直达新帖；
+                                        // 清稿/清附件按修订锁（在途新键入 rev 前移→不清新输入）
+                                        if (postDraftRev == submittedRev) {
+                                            io.github.deserthouse.sdgun.data.repository.DraftStore
+                                                .clearPost(mutContext, draftOwner, fid)
+                                            uploadTasks.clear()
+                                        }
                                         postOpen = false
                                         bvm.refresh(fid)
                                         val newTid = io.github.deserthouse.sdgun.data.repository
@@ -567,6 +610,7 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                                     }
                                 }
                             }
+                            }  // WP4-A/S03 else
                         },
                         onPickImages = {
                             pickImages.launch(
@@ -574,17 +618,8 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                                     androidx.activity.result.contract
                                         .ActivityResultContracts.PickVisualMedia.ImageOnly))
                         },
-                        onRetryUpload = { t ->
-                            postScope.launch {
-                                io.github.deserthouse.sdgun.feature.thread.UploadQueueLogic.runTask(
-                                    t, uploadTransport,
-                                ) { upd ->
-                                    val idx = uploadTasks.indexOfFirst { it.uuid == upd.uuid }
-                                    if (idx >= 0) uploadTasks[idx] = upd
-                                }
-                            }
-                        },
-                        onRemoveUpload = { t -> uploadTasks.removeAll { it.uuid == t.uuid } },
+                        onRetryUpload = { t -> uploadOwner.retry(t.uuid) },
+                        onRemoveUpload = { t -> uploadOwner.remove(t.uuid) },
                         uploadTasks = uploadTasks.toList(),
                         // Q3：分类 chips + circle_id 就绪门 + column-info 失败重试
                         postTypes = (colInfoState as? UiState.Data<*>)?.let {
@@ -620,7 +655,11 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
             fun openReply(targetPid: Long?) {
                 if (mutToken.isBlank()) { navigateTab(3) } else {
                     replyTargetPid = targetPid
-                    replyState = MutationState.Draft  // 审查修复：打开即重置（旧目标失败态不得串入新表单）
+                    // WP4-A/S09：Unknown 事实不降格（关开面板后仍须核对才能重发）；
+                    // 终态（Confirmed/Rejected）与新打开仍重置 Draft（旧目标失败态不串）
+                    if (replyState !is MutationState.OutcomeUnknown) {
+                        replyState = MutationState.Draft
+                    }
                     replyOpen = true
                 }
             }
@@ -763,6 +802,8 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                 onOpenUrl = { url -> openLink(url) },
                 // A1-3：附件块=系统下载器（带 WebView Cookie）
                 onDownloadAttachment = { url, name -> downloadAttachment(url, name) },
+                // WP5/S06：尾行状态机（FooterTailRow 唯一渲染）
+                footer = tvm.footer,
                 // R2/F17：举报（jadx ReportComp 同构：type=14 帖子、type_value=base64(json contentId)）
                 onReport = { contentId ->
                     if (contentId.isNotBlank()) {
@@ -898,37 +939,55 @@ onReplyToQuote = { pid -> openReply(pid) },
                     )
                 } else {
                     val profileFake by prefs.profileFake.collectAsState()
-                    var groups by remember(token) {
-                        mutableStateOf<List<ProfileRepository.MessageGroup>?>(emptyList())
+                    // WP6/S07：完整 UiState（AuthRequired=重登引导；Failed=可重试；不串私有数据）
+                    var groupsState by remember(token, profileFake) {
+                        mutableStateOf<UiState<List<ProfileRepository.MessageGroup>>>(
+                            UiState.InitialLoading)
                     }
-                    var loading by remember(token) { mutableStateOf(true) }
-                    LaunchedEffect(token, profileFake) {
-                        loading = true
-                        // U3-b：合成模式走夹具（零触网），off=真端点
-                        groups = if (profileFake == "data") {
-                            listOf(
+                    var groupsRetry by remember(token) { mutableIntStateOf(0) }
+                    LaunchedEffect(token, profileFake, groupsRetry) {
+                        groupsState = if (profileFake == "data") {
+                            UiState.Data(listOf(
                                 ProfileRepository.MessageGroup("g1", "（合成）私信：弓友A", 2),
                                 ProfileRepository.MessageGroup("g2", "（合成）私信：皮筋交流群", 5),
-                            )
-                        } else if (profileFake == "empty") emptyList()
-                        else if (profileFake == "error") null
-                        else when (val r = ProfileRepository.fetchMessageGroups(token)) {
-                            // Q4：AuthExpired 与 Failed 均不产出私有数据（组列表 UI 无鉴权态，
-                            // 两者同呈失败/空——内容面绝不串入）
-                            is ProfileRepository.PrivateResult.Ok -> r.value
-                            ProfileRepository.PrivateResult.AuthExpired -> null
-                            ProfileRepository.PrivateResult.Failed -> null
+                            ))
+                        } else if (profileFake == "empty") {
+                            UiState.Empty("暂无消息")
+                        } else if (profileFake == "error") {
+                            UiState.RetryableError("（合成）加载失败，可重试")
+                        } else if (token.isBlank()) {
+                            UiState.AuthRequired
+                        } else when (val r = ProfileRepository.fetchMessageGroups(token)) {
+                            is ProfileRepository.PrivateResult.Ok -> when {
+                                r.value.isEmpty() -> UiState.Empty("暂无消息")
+                                else -> UiState.Data(r.value)
+                            }
+                            ProfileRepository.PrivateResult.AuthExpired -> UiState.AuthRequired
+                            ProfileRepository.PrivateResult.Failed ->
+                                UiState.RetryableError("消息加载失败，可重试")
                         }
-                        loading = false
                     }
                     MessagesPage(
-                        groups = groups,
-                        isLoading = loading,
+                        groups = when (val gs = groupsState) {
+                            is UiState.Data<*> ->
+                                @Suppress("UNCHECKED_CAST")
+                                (gs.value as? List<ProfileRepository.MessageGroup>) ?: emptyList()
+                            else -> emptyList()
+                        },
+                        isLoading = groupsState is UiState.InitialLoading,
                         onOpenGroup = { g ->
                             navController.navigate(
                                 "messages/conversation/${g.id}?name=${Uri.encode(g.name)}&uid=${g.uid}")
                         },
                         onOpenNotifications = { navController.navigate("notifications") },
+                        // WP6/S07：失败/鉴权态给可执行恢复（重试/重登）
+                        onRetry = { groupsRetry++ },
+                        onGoLogin = { navController.navigate("login") },
+                        errorText = when (val gs = groupsState) {
+                            is UiState.RetryableError -> gs.error
+                            UiState.AuthRequired -> "登录后可查看消息"
+                            else -> null
+                        },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -1173,6 +1232,8 @@ onReplyToQuote = { pid -> openReply(pid) },
                                 collectScope.launch {
                                     val r = ProfileRepository.fetchCollectList(token, next)
                                     collectLoading = false
+                                    // WP6/S07：一次性归约（AuthRequired 后不再被 Data 覆盖）；
+                                    // Failed 保旧行+Stale 重试；Ok 才推进
                                     when (r) {
                                         is ProfileRepository.PrivateResult.Ok -> {
                                             val fetched = r.value
@@ -1182,16 +1243,26 @@ onReplyToQuote = { pid -> openReply(pid) },
                                                     io.github.deserthouse.sdgun.feature.profile.CollectItem(
                                                         0, it.title, it.timeText, it.link, it.key)
                                                 })
-                                            } else collectHasMore = false
+                                                collectHasMore = true
+                                                collectState = UiState.Data(
+                                                    io.github.deserthouse.sdgun.feature.profile.CollectPageData(
+                                                        collectRows.toList()))
+                                            } else {
+                                                collectHasMore = false
+                                                collectState = UiState.Data(
+                                                    io.github.deserthouse.sdgun.feature.profile.CollectPageData(
+                                                        collectRows.toList()))
+                                            }
                                         }
-                                        // Q4：AuthExpired 分页侧同分型（回 AuthRequired）
                                         ProfileRepository.PrivateResult.AuthExpired ->
                                             collectState = UiState.AuthRequired
-                                        ProfileRepository.PrivateResult.Failed -> {}
+                                        ProfileRepository.PrivateResult.Failed ->
+                                            collectState = UiState.Stale(
+                                                io.github.deserthouse.sdgun.feature.profile.CollectPageData(
+                                                    collectRows.toList()),
+                                                "下一页加载失败，可重试",
+                                            )
                                     }
-                                    collectState = UiState.Data(
-                                        io.github.deserthouse.sdgun.feature.profile.CollectPageData(
-                                            collectRows.toList()))
                                 }
                             },
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -1408,8 +1479,14 @@ onReplyToQuote = { pid -> openReply(pid) },
                 } else if (token.isBlank()) {
                     UiState.AuthRequired
                 } else {
-                    // 真链（notifyList v3 POST query p；⚠️ read-may-mutate 披露——不安排真探）
-                    when (val r = ProfileRepository.fetchNotifyList(token, 1)) {
+                    // WP6/S08：分类 code 契约门控——未知分类码零请求（扩展 soak 实证
+                    // 无 code=code0 拒），受限态如实说明；已知分类后按 code 请求
+                    val notifyCode: String? = null  // 待官方对照勘定（U-10 复核项）
+                    if (notifyCode.isNullOrBlank()) {
+                        UiState.Empty("通知历史需要分类入口参数（待勘定）——本地提醒不受影响")
+                    } else
+                    // 真链（notifyList v3 POST query p+code；⚠️ read-may-mutate 披露——不安排真探）
+                    when (val r = ProfileRepository.fetchNotifyList(token, 1, code = notifyCode)) {
                         is ProfileRepository.PrivateResult.Ok -> when {
                             r.value.isEmpty() -> UiState.Empty("暂无通知")
                             else -> {
@@ -1469,13 +1546,10 @@ onReplyToQuote = { pid -> openReply(pid) },
                 if (uid <= 0) { userState = UiState.RetryableError("无效用户"); return@LaunchedEffect }
                 followOverride = null; followState = WriteUi()  // 重取资料=关注态回到响应口径
                 userState = UiState.InitialLoading
-                when (val r = ProfileRepository.fetchMyInfo(userToken, uid)) {
-                    is ProfileRepository.PrivateResult.Ok -> UiState.Data(r.value)
-                    // Q4：本人 token 失效→AuthRequired；他人资料失败仍走可重试（二者根因不同）
-                    ProfileRepository.PrivateResult.AuthExpired -> UiState.AuthRequired
-                    ProfileRepository.PrivateResult.Failed ->
-                        UiState.RetryableError("资料加载失败（可能需要登录或该用户不存在）")
-                }
+                // WP3/A1104-S01：结果必须写回 userState（旧 when 丢弃=永久加载）；
+                // 映射收敛 ProfileRepository.mapUserProfileResult（JVM 反例在案）
+                userState = ProfileRepository.mapUserProfileResult(
+                    ProfileRepository.fetchMyInfo(userToken, uid))
             }
             fun doFollowToggle() {
                 val t = userToken
@@ -1524,6 +1598,8 @@ onReplyToQuote = { pid -> openReply(pid) },
                 state = userState,
                 onBack = { navController.popBackStack() },
                 onRetry = { userRetry++ },
+                // WP3/A1104-S01：AuthRequired 相位的去登录动作
+                onLogin = { navController.navigate("login") },
                 following = followDisplay,
                 followState = followState,
                 onFollowToggle = { doFollowToggle() },
@@ -1618,6 +1694,12 @@ onReplyToQuote = { pid -> openReply(pid) },
             val context = LocalContext.current
             NewsScreen(
                 onBack = { navController.popBackStack() },
+                onOpenThread = { tid, pid ->
+                    navController.navigate(
+                        "thread/$tid/0" + (pid?.let { "?pid=$it" } ?: "")) {
+                        launchSingleTop = true
+                    }
+                },
                 onOpenLink = { url ->
                     navController.popBackStack()
                     // AR-01：资讯详情与其他 loadUrl 入口同一分流——bbs 域内壳内浏览，

@@ -1,5 +1,12 @@
 package io.github.deserthouse.sdgun.feature.community
 
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -81,16 +88,7 @@ fun BoardPage(
                         overflow = TextOverflow.Ellipsis,
                     )
                 },
-                actions = {
-                    if (onPostThread != null) {
-                        TextButton(onClick = onPostThread) {
-                            Icon(Icons.Filled.Edit, contentDescription = null,
-                                modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("发帖", style = MaterialTheme.typography.labelLarge)
-                        }
-                    }
-                },
+                actions = {},  // WP2-A/V02：投稿动作唯一化（FAB 保留，顶栏入口退役）
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
                 ),
@@ -237,7 +235,9 @@ private fun BoardRowsList(
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 6.dp),
+        // WP2-A/V02：底栏余量防 FAB 遮末行
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            top = 6.dp, bottom = 120.dp),
     ) {
         if (staleError != null) {
             item(key = "stale") {
@@ -269,28 +269,76 @@ private fun ThreadRowItem(
     onClick: () -> Unit,
 ) {
     Card(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
         onClick = onClick,
     ) {
         Column(Modifier.padding(12.dp)) {
-            Text(
-                if (row.isTop) "[置顶] ${row.title}" else row.title,
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.height(4.dp))
+            // WP2-A：chips 独立（置顶/精华不拼标题）
+            if (row.isTop || row.isDigest) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (row.isTop) RowBadge("置顶", MaterialTheme.colorScheme.error)
+                    if (row.isDigest) RowBadge("精华", MaterialTheme.colorScheme.primary)
+                }
+                Spacer(Modifier.height(4.dp))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // 头像 36dp（无图=首字语义占位，复用 BoardIcon）
+                BoardIcon(url = row.avatarUrl, fallbackName = row.authorName ?: row.title)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        row.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    // 摘要：仅有值才显示（0-2 行；不捏造、不 subject 回退）
+                    row.summary?.let {
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                // 右列封面 88×60（首图；多图角标；无图不留洞）
+                row.coverUrl?.let { url ->
+                    Spacer(Modifier.width(10.dp))
+                    Box {
+                        RowCover(url = url)
+                        if (row.picCount > 1) {
+                            androidx.compose.material3.Surface(
+                                shape = MaterialTheme.shapes.small,
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                                modifier = Modifier.align(Alignment.BottomEnd).padding(3.dp),
+                            ) {
+                                Text(
+                                    "${row.picCount}图",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            // meta 独立一行（阅读语义去重：N 阅读）
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 row.authorName?.let {
                     Text(it, style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 row.replyCount?.let {
                     Text("回复 $it", style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 row.viewCount?.let {
-                    Text("查看 $it", style = MaterialTheme.typography.labelSmall,
+                    Text("$it 阅读", style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 row.lastReplyTime?.let {
@@ -299,6 +347,83 @@ private fun ThreadRowItem(
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
+        }
+    }
+}
+
+/** WP2-A：行内小徽章（置顶/精华） */
+@Composable
+private fun RowBadge(text: String, color: androidx.compose.ui.graphics.Color) {
+    androidx.compose.material3.Surface(
+        shape = MaterialTheme.shapes.small,
+        color = color.copy(alpha = 0.14f),
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelSmall,
+            color = color,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+    }
+}
+
+/** WP2-A：有界行封面（88×60，解码降采样，失败不留洞） */
+@Composable
+private fun RowCover(url: String) {
+    var bitmap by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<android.graphics.Bitmap?>(null)
+    }
+    var failed by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(url) {
+        bitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 8000
+                conn.readTimeout = 12000
+                try {
+                    val bytes = conn.inputStream.use { it.readBytes() }
+                    val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = 2 }
+                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                } finally {
+                    conn.disconnect()
+                }
+            } catch (e: Exception) {
+                null
+            }
+        }
+        if (bitmap == null) failed = true
+    }
+    val bmp = bitmap
+    if (bmp != null) {
+        androidx.compose.foundation.Image(
+            bitmap = bmp.asImageBitmap(),
+            contentDescription = null,
+            modifier = Modifier
+                .width(88.dp)
+                .height(60.dp)
+                .clip(MaterialTheme.shapes.small),
+        )
+    } else if (!failed) {
+        Box(
+            Modifier
+                .width(88.dp)
+                .height(60.dp)
+                .clip(MaterialTheme.shapes.small)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        )
+    } else {
+        Box(
+            Modifier
+                .width(88.dp)
+                .height(60.dp)
+                .clip(MaterialTheme.shapes.small),
+        ) {
+            Text(
+                "图",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.Center),
+            )
         }
     }
 }

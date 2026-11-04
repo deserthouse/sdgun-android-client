@@ -80,4 +80,17 @@ class Q4AuthUnifyTest {
         val load = peopleLoader(PeopleKind.FOLLOWS, null, "off") { people(emptyList()) }
         assertEquals(UiState.AuthRequired, load())
     }
+// ── WP3/A1104-S01：user 页结果映射（旧 when 丢弃=永久加载的反例固化） ──
+
+    @Test
+    fun `M1 三态映射 Ok-AuthExpired-Failed`() {
+        val up = ProfileRepository.UserProfile(1, "u", null, null, null, null, null, null, false, 0)
+        assertTrue(ProfileRepository.mapUserProfileResult(ProfileRepository.PrivateResult.Ok(up))
+            is UiState.Data<*>)
+        assertEquals(UiState.AuthRequired,
+            ProfileRepository.mapUserProfileResult(ProfileRepository.PrivateResult.AuthExpired))
+        assertTrue(ProfileRepository.mapUserProfileResult(ProfileRepository.PrivateResult.Failed)
+            is UiState.RetryableError)
+    }
+
 }

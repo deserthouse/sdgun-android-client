@@ -1,5 +1,6 @@
 package io.github.deserthouse.sdgun
 
+import io.github.deserthouse.sdgun.core.model.UiState
 import io.github.deserthouse.sdgun.data.repository.BoardListRepository
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -52,4 +53,48 @@ class Q5SearchTest {
         val rows = BoardListRepository.parseTopicSearch("""{"success":true,"list":[]}""")
         assertEquals(emptyList<BoardListRepository.TopicSearchRow>(), rows)
     }
+    // ── WP3/A1104-S04：SearchOwner 竞速与取消（A 慢返回不覆盖 B） ──
+
+    @Test
+    fun `O1 A 慢返回不覆盖 B 结果`() = kotlinx.coroutines.runBlocking {
+        val owner = io.github.deserthouse.sdgun.feature.community.SearchOwner(
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined))
+        owner.mode = 0
+        owner.query = "A"
+        var releaseA: (() -> Unit)? = null
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        owner.search({ _ ->
+            kotlinx.coroutines.delay(80)
+            gate.await()
+            listOf(BoardListRepository.TopicSearchRow("A结果", null, null))
+        }, { _ -> emptyList() })
+        owner.query = "B"
+        owner.search({ _ ->
+            listOf(BoardListRepository.TopicSearchRow("B结果", null, null))
+        }, { _ -> emptyList() })
+        kotlinx.coroutines.delay(150)
+        releaseA?.invoke()
+        gate.complete(Unit)
+        kotlinx.coroutines.delay(150)
+        val st = owner.topics
+        assertTrue("A 晚返回不得覆盖 B",
+            st is UiState.Data<*> &&
+                (st as UiState.Data<List<BoardListRepository.TopicSearchRow>>)
+                    .value.first().name == "B结果")
+    }
+
+    @Test
+    fun `O2 空白关键词零请求`() = kotlinx.coroutines.runBlocking {
+        val owner = io.github.deserthouse.sdgun.feature.community.SearchOwner(
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined))
+        var calls = 0
+        owner.mode = 0
+        owner.query = "  "
+        owner.search({ _ -> calls++; null }, { _ -> calls++; null })
+        kotlinx.coroutines.delay(50)
+        assertEquals(0, calls)
+    }
+
 }
+
+

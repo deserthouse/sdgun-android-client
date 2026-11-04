@@ -190,6 +190,7 @@ fun ReplySheet(
 
                             onDraftChange(text)
 
+                            verifyAck = false  // WP4-A/S09：票据消费（重发后再 Unknown 须再次核对）
                             onSend(text)
 
                         }

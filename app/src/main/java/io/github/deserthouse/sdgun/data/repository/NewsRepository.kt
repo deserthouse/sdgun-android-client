@@ -4,6 +4,18 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /** 资讯条目（AF-01）：infoListByCatId 字段归一化 */
+/** WP1-A（A1104-U01）：资讯条目的内容目标（解析一次；null=不可点） */
+sealed interface FeedTarget {
+    /** 论坛帖（tid 从已证 URL 派生；InfoId 不冒充 tid） */
+    data class Thread(val tid: Long, val pid: Long? = null) : FeedTarget
+
+    /** 站内可识别但非帖（官方文章/资讯详情等）——受控容器承载 */
+    data class Article(val url: String) : FeedTarget
+
+    /** 真外站——系统交接 */
+    data class External(val url: String) : FeedTarget
+}
+
 data class NewsItem(
     val id: Long,
     val title: String,
@@ -13,6 +25,8 @@ data class NewsItem(
     val timeText: String?,
     val comments: Int?,
     val link: String,
+    /** WP1-A：目标（parseItem 内由 link 经 TargetParser 派生一次；null=不可点） */
+    val target: FeedTarget? = null,
 )
 
 /**
@@ -110,6 +124,16 @@ object NewsRepository {
         val id = o.optLong("id", 0L)
         val link = o.optString("link")
         if (id <= 0 || !link.startsWith("http")) return null
+        // WP1-A：目标派生（一次）——Thread 原生；Web 且站方域（bbs/app/mag1）=Article
+        // 受控容器；其余=External 系统交接。InfoId(id) 不冒充 tid。
+        val target = when (val t = io.github.deserthouse.sdgun.core.navigation.TargetParser.parse(link)) {
+            is io.github.deserthouse.sdgun.core.navigation.Target.Thread ->
+                FeedTarget.Thread(t.tid, t.pid)
+            is io.github.deserthouse.sdgun.core.navigation.Target.Web ->
+                if (link.contains("sdgun.com.cn") || link.contains("sdgun.net")) FeedTarget.Article(link)
+                else FeedTarget.External(link)
+            else -> FeedTarget.External(link)
+        }
         return NewsItem(
             id = id,
             title = o.optString("title").trim(),
@@ -120,6 +144,7 @@ object NewsRepository {
             timeText = o.optString("publish_time_str").takeIf { it.isNotBlank() },
             comments = if (o.has("comment_count")) o.optInt("comment_count") else null,
             link = link,
+            target = target,
         )
     }
 
