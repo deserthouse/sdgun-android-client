@@ -26,7 +26,7 @@ Android 12+。从 [GitHub Releases](https://github.com/deserthouse/sdgun-android
 - **网络与使用范围**　登录、浏览、上传和主动提交的内容会发往论坛。请遵守论坛规则，本项目按现状提供。
 
 - **非官方**：本应用与 SDGun 论坛及其运营方无任何关联，未获其授权或认可。
-- **AI 使用披露**：本项目不含任何人类成分。项目代码由 AI 编写，人类负责提出需求、审阅与验收。
+- **AI 使用披露**：本项目不含任何人类成分。本项目的全部代码由 AI 编写，不含任何人类编写成分。人类负责提出需求、审阅与验收。
 
 **Data and affiliation.** This unofficial Android client reads and submits content through the forum. It stores preferences, session data, drafts and reading history locally. WebView also maintains cookies and cache. Forum actions use the signed-in account’s permissions.
 
