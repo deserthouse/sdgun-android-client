@@ -28,6 +28,7 @@ fun MessagesPage(
 ) {
     // A28-03 单一壳契约：顶栏归 TabShell（title="消息"），页内不再持有 TopAppBar
     Scaffold(
+        contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.surface,
     ) { padding ->

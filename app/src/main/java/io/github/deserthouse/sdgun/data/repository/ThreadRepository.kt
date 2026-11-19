@@ -47,6 +47,11 @@ object ThreadRepository {
         val createTime: String?,
         val applaudCount: Int?,
         val isPublisher: Boolean,
+        /** X1-2（A1104-F09）：supplemental_surface 元信息（2026-10-15 扩展实采字段名） */
+        val medalUrl: String? = null,
+        val certUrl: String? = null,
+        val groupIcoUrl: String? = null,
+        val ipLocation: String? = null,
         /** R6：被引用楼层摘要（to_comment；空=无引用） */
         val quoteAuthor: String? = null,
         val quoteText: String? = null,
@@ -119,6 +124,11 @@ object ThreadRepository {
                         ?.takeIf { it.isNotBlank() && it != "null" },
                     quotedPid = f.optJSONObject("to_comment")?.optLong("id", 0L)
                         ?.takeIf { it > 0 },
+                    // X1-2：supplemental_surface（medal/cert/group_ico=小图标；ip=属地文本）
+                    medalUrl = f.optString("medal_pic_url").takeIf { it.startsWith("http") },
+                    certUrl = f.optString("cert_pic_url").takeIf { it.startsWith("http") },
+                    groupIcoUrl = f.optString("group_ico_src").takeIf { it.startsWith("http") },
+                    ipLocation = f.optString("ip_address").takeIf { it.isNotBlank() && it != "null" },
                     videoUrl = f.optJSONArray("videos")?.optString(0)
                         ?.takeIf { it.startsWith("http") },
                 )

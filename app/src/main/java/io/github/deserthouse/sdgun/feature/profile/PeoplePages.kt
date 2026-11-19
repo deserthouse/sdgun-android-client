@@ -1,5 +1,10 @@
 package io.github.deserthouse.sdgun.feature.profile
 
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -49,6 +54,8 @@ enum class PeopleKind(val title: String) {
     VISITORS("访客"),
     HISTORY("浏览历史"),
     FOLLOWS("关注"),
+    FANS("粉丝"),
+    FOLLOWING("关注中"),
 }
 
 data class PeoplePageData(val people: List<ProfileRepository.PersonItem>)
@@ -112,6 +119,8 @@ private fun syntheticPeople(kind: PeopleKind): List<ProfileRepository.PersonItem
         PeopleKind.VISITORS -> "访问于 "
         PeopleKind.HISTORY -> "浏览于 "
         PeopleKind.FOLLOWS -> "关注于 "
+        PeopleKind.FANS -> "粉丝 "
+        PeopleKind.FOLLOWING -> "关注中 "
     }
     return (1..4).map { i ->
         ProfileRepository.PersonItem(
@@ -304,6 +313,12 @@ fun UserProfilePage(
     onRetry: () -> Unit,
     /** WP3/A1104-S01：AuthRequired 相位的去登录动作（null=仅返回） */
     onLogin: (() -> Unit)? = null,
+    /** X2/A1104-F18：用户帖子行点击→原生帖页（null=不可点） */
+    onOpenThread: ((Long) -> Unit)? = null,
+    /** A3/A1104-F13：粉丝/关注列表入口（null=不显示） */
+    onOpenPeople: ((io.github.deserthouse.sdgun.feature.profile.PeopleKind) -> Unit)? = null,
+    /** X2：读 token（用户帖子列表需登录态） */
+    apiToken: String = "",
     /** relation_status（null=响应未携带→不渲染关注钮，诚实未知） */
     following: Boolean? = null,
     followState: io.github.deserthouse.sdgun.core.model.WriteUi =
@@ -404,9 +419,60 @@ fun UserProfilePage(
                         u.sign?.let { Text("签名：$it", style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant) }
                         HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                        Text("他的帖子/动态：待后续版本",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        // X2/A1104-F18：用户帖子列表（userForumOrShowPage，owner 加载）
+                        val ctx2 = androidx.compose.runtime.rememberCoroutineScope()
+                        var threadRows by remember(u.userId) {
+                            mutableStateOf<List<ProfileRepository.UserThreadRow>?>(null)
+                        }
+                        var threadsLoading by remember(u.userId) { mutableStateOf(true) }
+                        var threadsRetry by remember(u.userId) { mutableStateOf(0) }
+                        androidx.compose.runtime.LaunchedEffect(u.userId, threadsRetry) {
+                            threadsLoading = true
+                            val t = io.github.deserthouse.sdgun.core.session.SessionManager.store
+                            val tok = apiToken
+                            val r = ProfileRepository.fetchUserThreads(tok, u.userId, 1)
+                            threadsLoading = false
+                            threadRows = when (r) {
+                                is ProfileRepository.PrivateResult.Ok -> r.value
+                                else -> null
+                            }
+                        }
+                        // A3/A1104-F13：粉丝/关注入口行
+                        if (onOpenPeople != null) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                TextButton(onClick = { onOpenPeople?.invoke(
+                                    io.github.deserthouse.sdgun.feature.profile.PeopleKind.FANS) }) {
+                                    Text("粉丝")
+                                }
+                                TextButton(onClick = { onOpenPeople?.invoke(
+                                    io.github.deserthouse.sdgun.feature.profile.PeopleKind.FOLLOWING) }) {
+                                    Text("关注")
+                                }
+                            }
+                        }
+                        Text("TA 的帖子", style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.padding(top = 8.dp))
+                        if (threadsLoading) {
+                            Text("加载中…", style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        } else when (val rows = threadRows) {
+                            null -> Text("加载失败", style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error)
+                            else -> if (rows.isEmpty()) {
+                                Text("暂无帖子", style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            } else rows.forEach { row ->
+                                Text(
+                                    row.title,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.fillMaxWidth()
+                                        .clickable { onOpenThread?.invoke(row.tid) }
+                                        .padding(vertical = 4.dp),
+                                )
+                            }
+                        }
                     }
                 }
 

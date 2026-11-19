@@ -43,6 +43,10 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onClearLoginState: (onDone: () -> Unit) -> Unit,
     onTab: (Int) -> Unit,
+    /** X1-3/A1104-F28：安全与隐私页入口（仅登录态可达） */
+    onOpenSecurity: (() -> Unit)? = null,
+    /** A3-5：关于页入口 */
+    onOpenAbout: (() -> Unit)? = null,
 ) {
     val dynamicColor by prefs.dynamicColor.collectAsStateCompat()
     val webTheme by prefs.webTheme.collectAsStateCompat()
@@ -201,6 +205,25 @@ fun SettingsScreen(
                             prefs.setMutationFake(next)
                         }) {
                             Text(mutationFake)
+                        }
+                    }
+
+                    // X1-3/A1104-F28：安全与隐私入口（登录态；经 navController 路由）
+                    if (onOpenSecurity != null && prefs.apiToken.value.isNotBlank()) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("安全与隐私", style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    "在线状态/距离/主页可见性（与官方 App 同步）",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            TextButton(onClick = { onOpenSecurity() }) { Text("进入") }
                         }
                     }
 

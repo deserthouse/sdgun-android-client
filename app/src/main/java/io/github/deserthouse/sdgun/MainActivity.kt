@@ -458,6 +458,10 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                 }
                 // WP4-A/S03：草稿修订号（在途期间新键入使 rev 前移→成功不清洗新输入）
                 var postDraftRev by remember(fid) { mutableIntStateOf(0) }
+                // A3-4/X4：投稿 @ 状态
+                var postShowPicker by remember(fid) { mutableStateOf(false) }
+                var postMentions by remember(fid) {
+                    mutableStateOf<List<Pair<Long, String>>>(emptyList()) }
                 // WP4-A/S02：任务恢复（进程/配置重建后按 URI 保留，RUNNING→WAITING 待补启）
                 val uploadTasks = androidx.compose.runtime.saveable.rememberSaveable(
                     fid, saver = io.github.deserthouse.sdgun.feature.thread.UploadTasksSaver,
@@ -526,6 +530,15 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                         postOpen = true
                     },
                 )
+                if (postShowPicker) {
+                    io.github.deserthouse.sdgun.feature.thread.UserPickerSheet(
+                        onDismiss = { postShowPicker = false },
+                        onPick = { uid, name ->
+                            postMentions = postMentions + (uid to name)
+                        },
+                        searchUsers = { kw -> ProfileRepository.searchUsers(postToken, kw) },
+                    )
+                }
                 if (postOpen) {
                     val draftOwner = io.github.deserthouse.sdgun.data.repository.DraftStore
                         .ownerOf(mutUserId)
@@ -534,6 +547,8 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                         authed = postToken.isNotBlank(),
                         // W0（A1104-V04）：游客 CTA 接回——Q3 重写时 onLogin 漏传致「去登录」不可达
                         onLogin = { navController.navigate("login") },
+                        onShowUserPicker = { postShowPicker = true },
+                        pendingMentions = postMentions,
                         submitting = postState is MutationState.Submitting,
                         mutationState = postState,
                         initialTitle = io.github.deserthouse.sdgun.data.repository.DraftStore
@@ -668,6 +683,9 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
             val applaudedIds = remember(tid) { mutableStateOf(setOf<Long>()) }
             val verifyAcked = remember(tid) { mutableStateOf(setOf<Long>()) }
             var verifyDialogFor by remember(tid) { mutableStateOf<Long?>(null) }
+            // A3-4/X4：@ 实体状态
+            var showUserPicker by remember(tid) { mutableStateOf(false) }
+            var replyMentions by remember(tid) { mutableStateOf<List<Pair<Long, String>>>(emptyList()) }
             var collected by remember(tid) { mutableStateOf(false) }
             var collectUi by remember(tid) { mutableStateOf(WriteUi()) }
             var collectVerifyAcked by remember(tid) { mutableStateOf(false) }
@@ -804,6 +822,15 @@ private fun AppRoot(prefs: AppPrefs, state: WebState, webView: WebView) {
                 onDownloadAttachment = { url, name -> downloadAttachment(url, name) },
                 // WP5/S06：尾行状态机（FooterTailRow 唯一渲染）
                 footer = tvm.footer,
+                // A3-3：底部赞钮
+                opPid = (opState as? UiState.Data<*>)?.value
+                    ?.let { it as? ThreadRepository.ThreadOP }?.pid ?: 0L,
+                opApplauded = (opState as? UiState.Data<*>)?.value
+                    ?.let { it as? ThreadRepository.ThreadOP }?.pid
+                    ?.let { it in applaudedIds.value } ?: false,
+                opApplaudState = (opState as? UiState.Data<*>)?.value
+                    ?.let { it as? ThreadRepository.ThreadOP }?.pid
+                    ?.let { applaudStates[it] } ?: WriteUi(),
                 // R2/F17：举报（jadx ReportComp 同构：type=14 帖子、type_value=base64(json contentId)）
                 onReport = { contentId ->
                     if (contentId.isNotBlank()) {
@@ -886,10 +913,24 @@ onReplyToQuote = { pid -> openReply(pid) },
                     },
                 )
             }
+            if (showUserPicker) {
+                io.github.deserthouse.sdgun.feature.thread.UserPickerSheet(
+                    onDismiss = { showUserPicker = false },
+                    onPick = { uid, name ->
+                        replyMentions = replyMentions + (uid to name)
+                    },
+                    searchUsers = { kw -> ProfileRepository.searchUsers(mutToken, kw) },
+                )
+            }
             if (replyOpen) {
                 val target = replyTargetPid
                 // A1-5：草稿按实际目标（root vs 被引 pid 各自独立）
                 ReplySheet(
+                    onShowUserPicker = { showUserPicker = true },
+                    pendingMentions = replyMentions,
+                    onMentionAdded = { uid, name ->
+                        replyMentions = replyMentions + (uid to name)
+                    },
                     replyKey = target,
                     initialDraft = DraftStore.load(mutContext, draftOwner, tid, target),
                     targetLabel = if (target != null) "引用楼层 #$target" else null,
@@ -906,7 +947,7 @@ onReplyToQuote = { pid -> openReply(pid) },
                                 "content" to text,
                                 "video" to "",
                                 "auth" to "",
-                                "users" to "",
+                                "users" to replyMentions.map { it.first.toString() }.joinToString(","),
                             ),
                         ) { st ->
                             replyState = st
@@ -1061,13 +1102,14 @@ onReplyToQuote = { pid -> openReply(pid) },
             }
         }
         // ── U3-b（F18/19）：访客/历史/关注/收藏（合成先行，off=真实读链）──
-        composable("profile/people/{kind}") { entry ->
+        composable("profile/people/{kind}?uid={uid}") { entry ->
             val kindName = entry.arguments?.getString("kind") ?: ""
             val kind = io.github.deserthouse.sdgun.feature.profile.PeopleKind.entries
                 .firstOrNull { it.name == kindName }
             if (kind == null) {
                 LaunchedEffect(Unit) { navController.popBackStack() }
             } else {
+                val viewUid = entry.arguments?.getString("uid")?.toLongOrNull() ?: 0L
                 val token by prefs.apiToken.collectAsState()
                 val profileFake by prefs.profileFake.collectAsState()
                 // kind 决定真实读链（loader 工厂按 kind 分流三端点）
@@ -1082,6 +1124,12 @@ onReplyToQuote = { pid -> openReply(pid) },
                                 ProfileRepository.fetchViewUsers(t)
                             io.github.deserthouse.sdgun.feature.profile.PeopleKind.FOLLOWS ->
                                 ProfileRepository.fetchFollows(t)
+                            // A3/A1104-F13：粉丝/关注列表（v3 userFansList/userFollowList，
+                            // 端点已在 ProfileRepository.fetchUserFansOrFollows）
+                            io.github.deserthouse.sdgun.feature.profile.PeopleKind.FANS ->
+                                ProfileRepository.fetchUserFansOrFollows(t, viewUid, fans = true)
+                            io.github.deserthouse.sdgun.feature.profile.PeopleKind.FOLLOWING ->
+                                ProfileRepository.fetchUserFansOrFollows(t, viewUid, fans = false)
                         }  // Q4：PrivateResult 直传，peopleLoader 内分型
                     }
                 }
@@ -1315,8 +1363,17 @@ onReplyToQuote = { pid -> openReply(pid) },
         composable("messages/conversation/{id}?name={name}&uid={uid}") { entry ->
             val name = entry.arguments?.getString("name") ?: "会话"
             val peerUid = entry.arguments?.getString("uid")?.toLongOrNull() ?: 0L
+            val mutUserId by prefs.apiUserId.collectAsState()
             val profileFake by prefs.profileFake.collectAsState()
             val convToken by prefs.apiToken.collectAsState()
+            // A3-2/A1104-F20：会话分页（累积+去重+加载更多）
+            var convPage by remember(name, profileFake) { mutableIntStateOf(1) }
+            var convRows = remember(name, profileFake) {
+                mutableStateListOf<ProfileRepository.MessageRow>()
+            }
+            var convHasMore by remember(name, profileFake) { mutableStateOf(true) }
+            var convConvLoading by remember(name, profileFake) { mutableStateOf(false) }
+            var convLoadMoreTick by remember(name, profileFake) { mutableIntStateOf(0) }
             var convState by remember(name, profileFake) {
                 mutableStateOf<UiState<io.github.deserthouse.sdgun.feature.messages.ConversationData>>(
                     UiState.InitialLoading)
@@ -1339,19 +1396,15 @@ onReplyToQuote = { pid -> openReply(pid) },
                     // Q2 修正：else 分支须为表达式（此前块内二次赋值使外层 if 值=Unit/Any，
                     // 编译不过——该结构进入树后从未真正编译过，幻绿窗口实证，见账本 Q2 行）
                     when (val r = ProfileRepository.fetchMessageList(convToken, peerUid, 1)) {
-                        // Q4：token 失效→AuthRequired（会话内容不串入）
-                        is ProfileRepository.PrivateResult.Ok -> when {
-                            r.value.isEmpty() -> UiState.Empty("暂无消息")
-                            else -> UiState.Data(
-                                io.github.deserthouse.sdgun.feature.messages.ConversationData(
-                                    r.value.map { row ->
-                                        io.github.deserthouse.sdgun.feature.messages.ChatBubble(
-                                            text = row.content,
-                                            time = row.timeText ?: "",
-                                            me = false,  // 方向判定=uid 对比（待真样本收紧）
-                                        )
-                                    }
-                                ))
+                        is ProfileRepository.PrivateResult.Ok -> {
+                            convPage = 1
+                            convRows.clear()
+                            convRows.addAll(r.value)
+                            convHasMore = r.value.size >= 20
+                            when {
+                                r.value.isEmpty() -> UiState.Empty("暂无消息")
+                                else -> UiState.Data(convBubbles(convRows, mutUserId))
+                            }
                         }
                         ProfileRepository.PrivateResult.AuthExpired -> UiState.AuthRequired
                         ProfileRepository.PrivateResult.Failed ->
@@ -1359,7 +1412,26 @@ onReplyToQuote = { pid -> openReply(pid) },
                     }
                 }
             }
-            // A28-01 补充修正：state 整体传入（旧 nullable data/isLoading 消费把
+            // A3-2：加载更多（tick 触发，累积去重）
+            LaunchedEffect(convLoadMoreTick) {
+                if (convLoadMoreTick > 0 && convHasMore && !convConvLoading && profileFake == "off") {
+                    convConvLoading = true
+                    val next = convPage + 1
+                    val r = ProfileRepository.fetchMessageList(convToken, peerUid, next)
+                    convConvLoading = false
+                    when (r) {
+                        is ProfileRepository.PrivateResult.Ok -> {
+                            if (r.value.isNotEmpty()) {
+                                convPage = next
+                                val seen = convRows.map { it.mid }.toSet()
+                                convRows.addAll(r.value.filter { it.mid !in seen })
+                            } else convHasMore = false
+                        }
+                        else -> {}
+                    }
+                }
+            }
+// A28-01 补充修正：state 整体传入（旧 nullable data/isLoading 消费把
             // Empty/RetryableError 压成空白/无反馈——AF29 复审点名）
             // Q2：私信发送（userMessageSendMsg POST uid+content；Confirmed 后重拉会话=
             // 官方 500ms refresh 同构语义）
@@ -1409,16 +1481,14 @@ onReplyToQuote = { pid -> openReply(pid) },
                     // 发送成功重拉（读端点 read-may-mutate 披露在案；仅 Confirmed 后触发）
                     convState = UiState.InitialLoading
                     convState = when (val r = ProfileRepository.fetchMessageList(convToken, peerUid, 1)) {
-                        is ProfileRepository.PrivateResult.Ok -> when {
-                            r.value.isEmpty() -> UiState.Empty("暂无消息")
-                            else -> UiState.Data(
-                                io.github.deserthouse.sdgun.feature.messages.ConversationData(
-                                    r.value.map { row ->
-                                        io.github.deserthouse.sdgun.feature.messages.ChatBubble(
-                                            text = row.content, time = row.timeText ?: "", me = false,
-                                        )
-                                    }
-                                ))
+                        is ProfileRepository.PrivateResult.Ok -> {
+                            convPage = 1
+                            convRows.clear()
+                            convRows.addAll(r.value)
+                            when {
+                                r.value.isEmpty() -> UiState.Empty("暂无消息")
+                                else -> UiState.Data(convBubbles(convRows, mutUserId))
+                            }
                         }
                         ProfileRepository.PrivateResult.AuthExpired -> UiState.AuthRequired
                         ProfileRepository.PrivateResult.Failed ->
@@ -1434,6 +1504,9 @@ onReplyToQuote = { pid -> openReply(pid) },
                 canSend = peerUid > 0 && convToken.isNotBlank() && profileFake == "off",
                 sendState = sendState,
                 onSend = { text -> doSend(text) },
+                hasMore = convHasMore,
+                loadingMore = convConvLoading,
+                onLoadMore = { convLoadMoreTick++ },
             )
             if (sendVerify) {
                 androidx.compose.material3.AlertDialog(
@@ -1469,7 +1542,13 @@ onReplyToQuote = { pid -> openReply(pid) },
             var notifyRows = remember(token, profileFake) {
                 mutableStateListOf<ProfileRepository.NotifyRow>()
             }
-            LaunchedEffect(token, profileFake, notifyRetry) {
+            // X1-1/A1104-S08：分类驱动（code=at/focus/applaud/comment，jadx 实证；
+            // ⚠️ read-may-mutate 披露不变——不安排真探，登录态用户自然使用即真实路径）
+            var notifyCat by remember(token, profileFake) {
+                mutableStateOf<ProfileRepository.NotifyCategoryCode?>(
+                    ProfileRepository.NotifyCategoryCode.AT)
+            }
+            LaunchedEffect(token, profileFake, notifyRetry, notifyCat) {
                 notifyState = if (profileFake == "data") {
                     UiState.Data(io.github.deserthouse.sdgun.feature.messages.syntheticNotify())
                 } else if (profileFake == "empty") {
@@ -1478,15 +1557,11 @@ onReplyToQuote = { pid -> openReply(pid) },
                     UiState.RetryableError("（合成）加载失败，可重试")
                 } else if (token.isBlank()) {
                     UiState.AuthRequired
+                } else if (notifyCat == null) {
+                    UiState.Empty("选择分类查看通知历史")
                 } else {
-                    // WP6/S08：分类 code 契约门控——未知分类码零请求（扩展 soak 实证
-                    // 无 code=code0 拒），受限态如实说明；已知分类后按 code 请求
-                    val notifyCode: String? = null  // 待官方对照勘定（U-10 复核项）
-                    if (notifyCode.isNullOrBlank()) {
-                        UiState.Empty("通知历史需要分类入口参数（待勘定）——本地提醒不受影响")
-                    } else
-                    // 真链（notifyList v3 POST query p+code；⚠️ read-may-mutate 披露——不安排真探）
-                    when (val r = ProfileRepository.fetchNotifyList(token, 1, code = notifyCode)) {
+                    // 真链（notifyList v3 POST query p+code）
+                    when (val r = ProfileRepository.fetchNotifyList(token, 1, code = notifyCat!!.code)) {
                         is ProfileRepository.PrivateResult.Ok -> when {
                             r.value.isEmpty() -> UiState.Empty("暂无通知")
                             else -> {
@@ -1525,6 +1600,14 @@ onReplyToQuote = { pid -> openReply(pid) },
                 onBack = { navController.popBackStack() },
                 onRetry = { notifyRetry++ },
                 onOpenLink = { url -> openLink(url) },
+                // X1-1：分类 chips（jadx ConversationFragment 实证 4 code）
+                categories = ProfileRepository.NotifyCategoryCode.entries.map {
+                    it.code to it.label
+                },
+                selectedCategory = notifyCat?.code,
+                onCategorySelect = { code ->
+                    notifyCat = code?.let { ProfileRepository.NotifyCategoryCode.fromCode(it) }
+                },
             )
         }
         // ── N1/A2-3：他人主页（getUserInfo POST id= 官方契约复用）──
@@ -1600,6 +1683,10 @@ onReplyToQuote = { pid -> openReply(pid) },
                 onRetry = { userRetry++ },
                 // WP3/A1104-S01：AuthRequired 相位的去登录动作
                 onLogin = { navController.navigate("login") },
+                // X2/A1104-F18：用户帖子行点击→原生帖页
+                onOpenThread = { tid -> navController.navigate("thread/$tid/0") },
+                apiToken = userToken,
+                onOpenPeople = { kind -> navController.navigate("profile/people/${kind.name}?uid=$uid") },
                 following = followDisplay,
                 followState = followState,
                 onFollowToggle = { doFollowToggle() },
@@ -1741,6 +1828,30 @@ onReplyToQuote = { pid -> openReply(pid) },
                     navController.popBackStack()
                     navigateTab(i)
                 },
+                onOpenSecurity = { navController.navigate("security") },
+                onOpenAbout = { navController.navigate("about") },
+            )
+        }
+        composable("about") {
+            io.github.deserthouse.sdgun.feature.settings.AboutPage(
+                onBack = { navController.popBackStack() },
+                versionName = io.github.deserthouse.sdgun.BuildConfig.VERSION_NAME ?: "?",
+                versionCode = io.github.deserthouse.sdgun.BuildConfig.VERSION_CODE,
+            )
+        }
+        composable("security") {
+            val secToken by prefs.apiToken.collectAsState()
+            io.github.deserthouse.sdgun.feature.account.SecurityPage(
+                onBack = { navController.popBackStack() },
+                token = secToken,
+                setPrivacy = { type, privacy ->
+                    io.github.deserthouse.sdgun.data.repository.ProfileRepository
+                        .setPrivacy(secToken, type, privacy)
+                },
+                setHomeVisible = { type ->
+                    io.github.deserthouse.sdgun.data.repository.ProfileRepository
+                        .setHomeVisible(secToken, type)
+                },
             )
         }
         composable("login") {
@@ -1826,4 +1937,23 @@ private fun TabShell(
             }
         }
     }
+
 }
+
+/**
+ * A3-2/A1104-F20：MessageRow 列表→ChatBubble（uid 对比方向判定；
+ * 合成/旧缓存 uid=0→对方）
+ */
+fun convBubbles(
+    rows: List<ProfileRepository.MessageRow>,
+    myUid: Long,
+): io.github.deserthouse.sdgun.feature.messages.ConversationData =
+    io.github.deserthouse.sdgun.feature.messages.ConversationData(
+        rows.map { row ->
+            io.github.deserthouse.sdgun.feature.messages.ChatBubble(
+                text = row.content,
+                time = row.timeText ?: "",
+                me = row.uid > 0 && row.uid == myUid,
+            )
+        }
+    )

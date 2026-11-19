@@ -156,10 +156,33 @@ object BoardListRepository {
                 }
             }
             val types = mutableListOf<Pair<String, String>>()
-            d.optJSONObject("threadtypes")?.let { tt ->
-                tt.keys().asSequence().forEach { k ->
-                    val v = tt.optJSONObject(k)
-                    if (v != null) types.add(k to v.optString("name"))
+            // A1（三轮审查跨域发现）：threadtypes 真实存在三种形态，三优先级依次尝试——
+            // ① data.types.types = [{id, name}]（官方规范数组，fid=175/54 等字典板块）
+            // ② threadtypes.types = {"204": "集优质内容…"}（threadtypes 内嵌键值对）
+            // ③ threadtypes = {key: {name: "…"}}（旧假设形态，兼容兜底）
+            // 旧代码只走 ③——字典板块 4/5 分类筛选恒空（实采 fd_175 模拟 parse 得 [("types","")]）
+            d.optJSONObject("types")?.optJSONArray("types")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val id = o.optInt("id", 0)
+                    val name = o.optString("name")
+                    if (id > 0 && name.isNotBlank()) types.add("$id" to name)
+                }
+            }
+            if (types.isEmpty()) {
+                d.optJSONObject("threadtypes")?.optJSONObject("types")?.let { inner ->
+                    inner.keys().asSequence().forEach { k ->
+                        val name = inner.optString(k)
+                        if (k.isNotBlank() && name.isNotBlank()) types.add(k to name)
+                    }
+                }
+            }
+            if (types.isEmpty()) {
+                d.optJSONObject("threadtypes")?.let { tt ->
+                    tt.keys().asSequence().forEach { k ->
+                        val v = tt.optJSONObject(k)
+                        if (v != null) types.add(k to v.optString("name"))
+                    }
                 }
             }
             BoardMeta(

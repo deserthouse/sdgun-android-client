@@ -1,5 +1,6 @@
 package io.github.deserthouse.sdgun.feature.thread
 
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -65,6 +66,10 @@ fun ThreadPage(
     onReplyToQuote: (Long) -> Unit = {},
     /** WP5/S06：尾行状态机（FooterTailRow 唯一渲染） */
     footer: ThreadViewModel.Footer = ThreadViewModel.Footer.Loading,
+    /** A3-3/X3-2：底部赞钮参数 */
+    opPid: Long = 0L,
+    opApplauded: Boolean = false,
+    opApplaudState: WriteUi = WriteUi(),
     onShare: (String) -> Unit = {},
     /** R2/F17：举报（jadx ReportComp 同构 H5 通道：userReportView?type=14&type_value=base64(contentId)） */
     onReport: (contentId: String) -> Unit = {},
@@ -127,11 +132,21 @@ fun ThreadPage(
             // G4 回复入口：游客引导登录（路由层跳转），登录态开编辑器
             Row(
                 Modifier.fillMaxWidth()
+                    .navigationBarsPadding()
                     .background(MaterialTheme.colorScheme.surfaceVariant)
                     .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Button(onClick = onReply, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (isLoggedIn) "回复本帖" else "登录后回复")
+                Button(onClick = onReply, modifier = Modifier.weight(1f)) {
+                    Text(if (isLoggedIn) "回复" else "登录后回复")
+                }
+                // A3-3/X3-2：底部赞钮（高频拇指区；Pending 禁点）
+                androidx.compose.material3.OutlinedButton(
+                    onClick = { onApplaud(opPid) },
+                    enabled = opPid > 0 && opApplaudState.phase != WriteUiPhase.Pending,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(if (opApplauded) "已赞" else "赞")
                 }
             }
         },

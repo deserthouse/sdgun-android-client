@@ -2,6 +2,7 @@ package io.github.deserthouse.sdgun.feature.thread
 
 
 
+import androidx.compose.material3.TextButton
 import androidx.compose.foundation.layout.Arrangement
 
 import androidx.compose.foundation.layout.Column
@@ -79,6 +80,11 @@ fun ReplySheet(
     onDraftChange: (String) -> Unit,
 
     onSend: (String) -> Unit,
+    /** A3-4/X4：@ 选择器入口（null=不显示 @ 钮） */
+    onShowUserPicker: (() -> Unit)? = null,
+    /** A3-4/X4：pending @ 列表（提交时序列化为 users 参数） */
+    pendingMentions: List<Pair<Long, String>> = emptyList(),
+    onMentionAdded: ((Long, String) -> Unit)? = null,
 
     onDismiss: () -> Unit,
 
@@ -175,6 +181,20 @@ fun ReplySheet(
                 verticalAlignment = Alignment.CenterVertically,
 
             ) {
+
+                // A3-4/X4：@ 钮（选择器由调用方控制；结果经 onMentionAdded 回传）
+                if (onShowUserPicker != null) {
+                    TextButton(onClick = { onShowUserPicker() }) {
+                        Text("@", style = MaterialTheme.typography.titleLarge)
+                    }
+                    pendingMentions.forEach { (_, name) ->
+                        Text(
+                            "@$name ",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
 
                 val unknownGate = state is MutationState.OutcomeUnknown && !verifyAck
 

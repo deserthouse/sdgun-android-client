@@ -88,8 +88,18 @@ fun BlockView(
             onOpenImage(group, group.indexOf(block.url).coerceAtLeast(0))
         }
 
-        is ContentBlock.Video -> TextButton(
-            onClick = { onOpenUrl(block.url) },
+        is ContentBlock.Video -> {
+            // A3-5/X5-3：视频内嵌播放（Media3）
+            var showVideo by androidx.compose.runtime.remember(block.url) {
+                androidx.compose.runtime.mutableStateOf(false) }
+            if (showVideo) {
+                io.github.deserthouse.sdgun.feature.media.VideoPlayerSheet(
+                    url = block.url,
+                    onDismiss = { showVideo = false },
+                )
+            }
+            TextButton(
+                onClick = { showVideo = true },
             modifier = Modifier.padding(horizontal = 12.dp),
         ) {
             Icon(
@@ -98,8 +108,9 @@ fun BlockView(
                 modifier = Modifier.size(18.dp),
             )
             Spacer(Modifier.width(6.dp))
-            Text("视频（点击播放/打开）", style = MaterialTheme.typography.labelLarge)
+            Text("视频", style = MaterialTheme.typography.labelLarge)
         }
+        }  // close Video block wrapper
 
         is ContentBlock.Attachment -> Row(
             Modifier.padding(horizontal = 12.dp),
@@ -256,6 +267,18 @@ fun FloorCard(
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Medium,
             )
+            // X1-2（A1104-F09）：勋章/认证/用户组小图标+IP 属地（supplemental_surface）
+            floor.medalUrl?.let { FloorBadgeIcon(it, "勋章") }
+            floor.certUrl?.let { FloorBadgeIcon(it, "认证") }
+            floor.groupIcoUrl?.let { FloorBadgeIcon(it, "用户组") }
+            floor.ipLocation?.let {
+                Text(
+                    "IP属地 $it",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
             if (floor.isPublisher) {
                 Spacer(Modifier.width(6.dp))
                 Text(
@@ -348,6 +371,40 @@ fun FloorCard(
         HorizontalDivider(
             Modifier.padding(top = 8.dp),
             color = MaterialTheme.colorScheme.outlineVariant,
+        )
+    }
+}
+
+/** X1-2：楼层元信息小图标（有界解码，14dp 高，失败静默） */
+@Composable
+fun FloorBadgeIcon(url: String, desc: String) {
+    var bitmap by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<android.graphics.Bitmap?>(null)
+    }
+    androidx.compose.runtime.LaunchedEffect(url) {
+        bitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 8000
+                conn.readTimeout = 12000
+                try {
+                    val bytes = conn.inputStream.use { it.readBytes() }
+                    val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = 2 }
+                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                } finally {
+                    conn.disconnect()
+                }
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+    val bmp = bitmap
+    if (bmp != null) {
+        androidx.compose.foundation.Image(
+            bitmap = bmp.asImageBitmap(),
+            contentDescription = desc,
+            modifier = Modifier.height(14.dp),
         )
     }
 }

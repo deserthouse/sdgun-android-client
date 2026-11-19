@@ -338,7 +338,9 @@ private fun ThreadRowItem(
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 row.viewCount?.let {
-                    Text("$it 阅读", style = MaterialTheme.typography.labelSmall,
+                    // 服务端 click 字段可能已含「阅读」后缀（如"3.4万阅读"）——避免重复
+                    val text = if (it.contains("阅读")) it else "$it 阅读"
+                    Text(text, style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 row.lastReplyTime?.let {

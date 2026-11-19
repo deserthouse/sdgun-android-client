@@ -11,7 +11,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val APP_VERSION_NAME = "2.2.1"
+val APP_VERSION_NAME = "2.3.0"
 
 android {
     namespace = "io.github.deserthouse.sdgun"
@@ -21,7 +21,7 @@ android {
         applicationId = "io.github.deserthouse.sdgun"
         minSdk = 31
         targetSdk = 37
-        versionCode = 44
+        versionCode = 45
         versionName = APP_VERSION_NAME
     }
 
@@ -114,6 +114,8 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     // Material 3 1.5+ includes Expressive APIs
     implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-ui:1.4.1")
 
     // ━━━ 下拉刷新（WebView 包 SwipeRefreshLayout，原生嵌套滚动判断） ━━━
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")

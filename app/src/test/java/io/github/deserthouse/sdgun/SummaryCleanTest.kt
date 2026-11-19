@@ -27,4 +27,28 @@ class SummaryCleanTest {
     fun `组合前缀一次性剥离`() {
         assertEquals("正文", NewsRepository.cleanSummary("[测评] 本帖最后由某某于2026-8-221:09编辑正文"))
     }
+
+    // ── WP9/N1（2026-11-05 视觉审计实锤）：des 实体未解码上屏乱码 ──
+
+    @org.junit.Test
+    fun `N1 单转义解码`() {
+        val out = io.github.deserthouse.sdgun.data.repository.NewsRepository
+            .cleanSummary("大牛的m&amp;p竞技c真的很不错")
+        org.junit.Assert.assertEquals("大牛的m&p竞技c真的很不错", out)
+    }
+
+    @org.junit.Test
+    fun `N1 双重转义迭代解码`() {
+        val out = io.github.deserthouse.sdgun.data.repository.NewsRepository
+            .cleanSummary("大牛的m&amp;amp;p竞技c")
+        org.junit.Assert.assertEquals("大牛的m&p竞技c", out)
+    }
+
+    @org.junit.Test
+    fun `N1 全套实体解码`() {
+        val out = io.github.deserthouse.sdgun.data.repository.NewsRepository
+            .cleanSummary("&lt;a&gt; &quot;q&quot; &nbsp;x")
+        org.junit.Assert.assertEquals("<a> \"q\"  x", out)
+    }
+
 }

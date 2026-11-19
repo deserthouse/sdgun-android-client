@@ -43,6 +43,7 @@ fun ProfilePage(
 ) {
     // A28-03 单一壳契约：顶栏归 TabShell（title="我的"+齿轮动作），页内不再持有
     Scaffold(
+        contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
         containerColor = MaterialTheme.colorScheme.surface,
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {

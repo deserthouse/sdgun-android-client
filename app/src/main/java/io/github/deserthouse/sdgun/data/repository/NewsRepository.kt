@@ -153,7 +153,23 @@ object NewsRepository {
      * 纯函数 JVM 可测；不改动 des 原文语义，只去版式噪声。
      */
     internal fun cleanSummary(raw: String): String {
-        var s = raw.trim()
+        // WP9/N1：HTML 实体解码（服务端 des 含 &amp; 等实体，直出上屏=乱码）
+        // 迭代解码（服务端实测存在双重转义 &amp;amp;——单次不解干净；上限 3 轮防死循环）
+        var raw2 = raw
+        var round = 0
+        while (round < 3) {
+            val prev = raw2
+            raw2 = raw2
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&apos;", "'")
+                .replace("&nbsp;", " ")
+            if (raw2 == prev) break
+            round++
+        }
+        var s = raw2.trim()
         // 迭代剥：组合前缀（[分类] 本帖最后由…编辑 正文）需多轮直到稳定
         while (true) {
             val prev = s

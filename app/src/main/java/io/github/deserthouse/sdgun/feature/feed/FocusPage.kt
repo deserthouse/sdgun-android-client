@@ -104,6 +104,9 @@ private fun FocusFeed(
     Scaffold(
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.surface,
+        // WP9/V01 修正：TabShell 已交付完整 padding——内层 Scaffold 默认
+        // contentWindowInsets 再计一次 system bar = 根页顶部 ~60dp 空白（实拍实锤）
+        contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
     ) { padding ->
         // B0-1（V1 修复）：Scaffold content 是 Box——旧写法 Column(频道条) 与 when(内容)
         // 是兄弟节点互相叠放，fillMaxSize 的内容层把频道条盖死。改单列纵排。

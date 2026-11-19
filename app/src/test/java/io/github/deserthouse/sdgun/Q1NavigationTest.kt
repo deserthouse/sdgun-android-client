@@ -102,6 +102,12 @@ class Q1NavigationTest {
         isPublisher = false,
     )
 
+    private fun op(tid: Long) = ThreadRepository.ThreadOP(
+        tid = tid, pid = tid, fid = 0, title = "t", contentHtml = "",
+        authorName = null, authorId = null, avatarUrl = null, createTime = null,
+        viewCount = null, replyCount = null, pics = emptyList(),
+    )
+
     private fun page(p: Int, total: Int, count: Int = 2) = ThreadRepository.FloorsPage(
         (1..count).map { i -> floor(pid = p * 10L + i, fl = (p - 1) * count + i + 1) },
         p, total,
@@ -121,6 +127,7 @@ class Q1NavigationTest {
     fun `J1 已加载命中即时定位不动筛选`() = runBlocking {
         val vm = ThreadViewModel(
             CoroutineScope(Dispatchers.Unconfined),
+            fetchOp = { _, _ -> op(1) },
             fetchFloors = { _, p, _, _ -> page(p, 1) },
             jumpPollMs = 1,
         )
@@ -135,6 +142,7 @@ class Q1NavigationTest {
     fun `J2 跨页扫描命中第 3 页`() = runBlocking {
         val vm = ThreadViewModel(
             CoroutineScope(Dispatchers.Unconfined),
+            fetchOp = { _, _ -> op(1) },
             fetchFloors = { _, p, _, _ -> page(p, 5) },
             jumpPollMs = 1,
         )
@@ -151,6 +159,7 @@ class Q1NavigationTest {
     fun `J3 扫到末页未找到=NotFound 不假称成功`() = runBlocking {
         val vm = ThreadViewModel(
             CoroutineScope(Dispatchers.Unconfined),
+            fetchOp = { _, _ -> op(1) },
             fetchFloors = { _, p, _, _ -> page(p, 2) },
             jumpPollMs = 1,
         )
@@ -167,6 +176,7 @@ class Q1NavigationTest {
         // 2 页×2 层：楼层号 3 在第 2 页（floor=(p-1)*2+i+1 → p2 i1 → floor=4? 显式验证跨页）
         val vm = ThreadViewModel(
             CoroutineScope(Dispatchers.Unconfined),
+            fetchOp = { _, _ -> op(1) },
             fetchFloors = { _, p, _, _ -> page(p, 3) },
             jumpPollMs = 1,
         )

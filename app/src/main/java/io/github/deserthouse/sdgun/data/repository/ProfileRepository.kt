@@ -1,5 +1,6 @@
 package io.github.deserthouse.sdgun.data.repository
 
+import io.github.deserthouse.sdgun.core.model.MutationResult
 import io.github.deserthouse.sdgun.core.model.UiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -23,6 +24,140 @@ object ProfileRepository {
         object AuthExpired : PrivateResult<Nothing>()
         object Failed : PrivateResult<Nothing>()
     }
+
+
+    /** 他人/本人帖子列表（userForumOrShowPage；config_id=3=论坛帖子 tab，扩展域 soak 实证 n=20） */
+    // ── X2（A1104-F13/F18/F20）：用户内容/关系端点（扩展域 soak 实证）──
+
+    const val USER_FORUM_OR_SHOW_PAGE = "https://mag1.sdgun.net/mag/user/v2/user/userForumOrShowPage"
+    const val USER_FANS_LIST = "https://mag1.sdgun.net/mag/user/v3/user/userFansList"
+    const val USER_FOLLOW_LIST = "https://mag1.sdgun.net/mag/user/v3/user/userFollowList"
+
+    /** 用户帖子行（userForumOrShowPage：user_id+config_id=3+p+step；行=tid+title+reply 等） */
+    data class UserThreadRow(
+        val tid: Long,
+        val title: String,
+        val replyCount: String?,
+        val viewCount: String?,
+        val timeText: String?,
+    )
+
+    /** 解析（S05 口径：null=失败/拒绝；空=合法空）——行字段宽采（forum/show 混合形态） */
+    fun parseUserThreads(json: String): List<UserThreadRow>? {
+        return try {
+            val obj = JSONObject(json)
+            if (obj.has("success") && !obj.optBoolean("success")) return null
+            val arr = obj.optJSONArray("list") ?: return null
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                val tid = o.optLong("tid", o.optLong("id", 0L))
+                val title = o.optString("title").replace(Regex("<[^>]*>"), "").trim()
+                if (tid <= 0 || title.isBlank()) return@mapNotNull null
+                UserThreadRow(
+                    tid = tid,
+                    title = title,
+                    replyCount = o.optString("reply_count").takeIf { it.isNotBlank() && it != "null" },
+                    viewCount = o.optString("click").takeIf { it.isNotBlank() && it != "null" },
+                    timeText = o.optString("last_reply_time").takeIf { it.isNotBlank() && it != "null" }
+                        ?.let { BoardListRepository.relativeTime(it) },
+                )
+            }
+        } catch (e: Exception) { null }
+    }
+
+    suspend fun fetchUserThreads(token: String, uid: Long, page: Int = 1): PrivateResult<List<UserThreadRow>> =
+        withContext(Dispatchers.IO) {
+            if (token.isBlank() || uid <= 0) return@withContext PrivateResult.Failed
+            try {
+                val conn = URL("$USER_FORUM_OR_SHOW_PAGE?user_id=$uid&config_id=3&p=$page&step=20")
+                    .openConnection() as HttpURLConnection
+                conn.connectTimeout = 12000
+                conn.readTimeout = 15000
+                conn.setRequestProperty("User-Agent", magappxUa(token))
+                try {
+                    val body = conn.inputStream.bufferedReader().readText()
+                    if (isAuthRejected(body)) return@withContext PrivateResult.AuthExpired
+                    val rows = parseUserThreads(body) ?: return@withContext PrivateResult.Failed
+                    PrivateResult.Ok(rows)
+                } finally { conn.disconnect() }
+            } catch (e: Exception) { PrivateResult.Failed }
+        }
+
+    /** 粉丝/关注列表（v3 GET user_id+p+step；行=user_id+name+head+status 互关标记） */
+    suspend fun fetchUserFansOrFollows(token: String, uid: Long, fans: Boolean, page: Int = 1): PrivateResult<List<PersonItem>> =
+        withContext(Dispatchers.IO) {
+            if (token.isBlank() || uid <= 0) return@withContext PrivateResult.Failed
+            val url = if (fans) USER_FANS_LIST else USER_FOLLOW_LIST
+            try {
+                val conn = URL("$url?user_id=$uid&p=$page&step=20")
+                    .openConnection() as HttpURLConnection
+                conn.connectTimeout = 12000
+                conn.readTimeout = 15000
+                conn.setRequestProperty("User-Agent", magappxUa(token))
+                try {
+                    val body = conn.inputStream.bufferedReader().readText()
+                    if (isAuthRejected(body)) return@withContext PrivateResult.AuthExpired
+                    val rows = parsePeople(body) ?: return@withContext PrivateResult.Failed
+                    PrivateResult.Ok(rows)
+                } finally { conn.disconnect() }
+            } catch (e: Exception) { PrivateResult.Failed }
+        }
+
+    /** WP3/A1104-S01：私有资料结果→UI 态映射（纯函数，JVM 可测； MainActivity user 页消费） */
+    const val PRIVACY_FIND_SET = "https://mag1.sdgun.net//mag/user/v1/user/privacyFindSet"
+    const val SET_HOME_VISIBLE = "https://mag1.sdgun.net/mag/user/v1/user/homePageSetting"
+
+    /**
+     * 隐私开关（jadx hideTimeClick/hideDistanceClick：GET type+privacy）。
+     * type 1=隐藏在线状态 2=隐藏距离；privacy 1=开(-隐藏) / -1=关。合成关闭制。
+     */
+    suspend fun setPrivacy(token: String, type: Int, privacy: Int): MutationResult =
+        withContext(Dispatchers.IO) {
+            if (token.isBlank()) return@withContext MutationResult.OutcomeUnknown
+            try {
+                val conn = URL("$PRIVACY_FIND_SET?type=$type&privacy=$privacy")
+                    .openConnection() as HttpURLConnection
+                conn.connectTimeout = 12000
+                conn.readTimeout = 15000
+                conn.setRequestProperty("User-Agent", magappxUa(token))
+                try {
+                    val body = conn.inputStream.bufferedReader().readText()
+                    val obj = JSONObject(body)
+                    val success = obj.opt("success")
+                    when {
+                        success is Boolean && success -> MutationResult.Confirmed("已更新")
+                        success is Boolean -> MutationResult.Rejected(0, obj.optString("msg").ifBlank { "设置失败" })
+                        else -> MutationResult.OutcomeUnknown
+                    }
+                } finally { conn.disconnect() }
+            } catch (e: Exception) { MutationResult.OutcomeUnknown }
+        }
+
+    /** 主页可见性（jadx :196：POST type；合成关闭制） */
+    suspend fun setHomeVisible(token: String, type: Int): MutationResult =
+        withContext(Dispatchers.IO) {
+            if (token.isBlank()) return@withContext MutationResult.OutcomeUnknown
+            try {
+                val conn = URL(SET_HOME_VISIBLE).openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.connectTimeout = 12000
+                conn.readTimeout = 15000
+                conn.setRequestProperty("User-Agent", magappxUa(token))
+                conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+                try {
+                    conn.outputStream.use { it.write("type=$type".toByteArray(Charsets.UTF_8)) }
+                    val body = conn.inputStream.bufferedReader().readText()
+                    val obj = JSONObject(body)
+                    val success = obj.opt("success")
+                    when {
+                        success is Boolean && success -> MutationResult.Confirmed("已更新")
+                        success is Boolean -> MutationResult.Rejected(0, obj.optString("msg").ifBlank { "设置失败" })
+                        else -> MutationResult.OutcomeUnknown
+                    }
+                } finally { conn.disconnect() }
+            } catch (e: Exception) { MutationResult.OutcomeUnknown }
+        }
 
     /** WP3/A1104-S01：私有资料结果→UI 态映射（纯函数，JVM 可测； MainActivity user 页消费） */
     fun mapUserProfileResult(r: PrivateResult<UserProfile>): UiState<UserProfile> = when (r) {
@@ -270,6 +405,22 @@ object ProfileRepository {
                 )
             }
         } catch (e: Exception) { null }
+    }
+
+    /**
+     * X1-1/A1104-S08：通知分类 code（jadx ConversationFragment 实证：
+     * at=@我的 / focus=关注 / applaud=点赞 / comment=评论——扩展域 R4 同源）。
+     * 未知分类零请求不变（WP6 门控保留）。
+     */
+    enum class NotifyCategoryCode(val code: String, val label: String) {
+        AT("at", "@我的"),
+        FOCUS("focus", "关注"),
+        APPLAUD("applaud", "点赞"),
+        COMMENT("comment", "评论");
+
+        companion object {
+            fun fromCode(code: String): NotifyCategoryCode? = entries.firstOrNull { it.code == code }
+        }
     }
 
     /**

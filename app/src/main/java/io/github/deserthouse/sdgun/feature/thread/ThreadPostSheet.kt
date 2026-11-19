@@ -402,6 +402,9 @@ fun ThreadPostSheet(
     onRetryUpload: (UploadTaskItem) -> Unit = {},
     onRemoveUpload: (UploadTaskItem) -> Unit = {},
     onLogin: (() -> Unit)? = null,
+    /** A3-4/X4：@ 选择器入口 */
+    onShowUserPicker: (() -> Unit)? = null,
+    pendingMentions: List<Pair<Long, String>> = emptyList(),
     uploadTasks: List<UploadTaskItem> = emptyList(),
 ) {
     var title by remember { mutableStateOf(initialTitle) }
@@ -502,6 +505,24 @@ fun ThreadPostSheet(
                         }
                     }
                 }
+            }
+            // A3-4/X4：@ 钮行
+            if (onShowUserPicker != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { onShowUserPicker() }) {
+                        Text("@", style = MaterialTheme.typography.titleLarge)
+                    }
+                    pendingMentions.forEach { (_, name) ->
+                        Text(
+                            "@$name ",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            }
+            if (preview) {
+                // preview mode renders a read-only Card (already handled above)
             } else {
             OutlinedTextField(
                 value = content,

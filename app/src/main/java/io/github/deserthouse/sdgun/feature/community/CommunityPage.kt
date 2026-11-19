@@ -58,6 +58,7 @@ fun CommunityPage(
     Scaffold(
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.surface,
+        contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
     ) { padding ->
         when (state) {
             is UiState.InitialLoading -> Column(

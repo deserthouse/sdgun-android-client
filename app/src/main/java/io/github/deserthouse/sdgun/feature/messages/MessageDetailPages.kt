@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.material3.FilterChip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -90,6 +92,10 @@ fun ConversationDetailPage(
     canSend: Boolean = false,
     sendState: WriteUi = WriteUi(),
     onSend: ((String) -> Unit)? = null,
+    /** A3-2：会话分页（加载更多） */
+    hasMore: Boolean = false,
+    loadingMore: Boolean = false,
+    onLoadMore: () -> Unit = {},
 ) {
     Scaffold(
         topBar = {
@@ -242,6 +248,10 @@ fun NotificationPage(
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onOpenLink: ((String) -> Unit)? = null,
+    /** X1-1：分类 chips（code=at/focus/applaud/comment，jadx 实证） */
+    categories: List<Pair<String, String>> = emptyList(),
+    selectedCategory: String? = null,
+    onCategorySelect: ((String?) -> Unit)? = null,
 ) {
     val ctx = LocalContext.current
     // POST_NOTIFICATIONS 运行时权限（targetSdk 33+）：拒绝态给系统设置入口；
@@ -284,6 +294,25 @@ fun NotificationPage(
                         }) { Text("去系统设置开启") }
                     }
                 }
+            }
+            // X1-1：分类 chips（code=at/focus/applaud/comment）
+            if (categories.isNotEmpty() && onCategorySelect != null) {
+                androidx.compose.foundation.lazy.LazyRow(
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(
+                        listOf("" to "全部") + categories,
+                        key = { "nc_${it.first}" },
+                    ) { (code, label) ->
+                        FilterChip(
+                            selected = selectedCategory == (if (code == "") null else code),
+                            onClick = { onCategorySelect(if (code == "") null else code) },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+            }
             }
             when (state) {
                 is UiState.InitialLoading -> Column(
@@ -339,4 +368,3 @@ fun NotificationPage(
             }
         }
     }
-}
