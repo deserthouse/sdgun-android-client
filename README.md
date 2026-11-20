@@ -2,6 +2,8 @@
 
 非官方第三方 Android 客户端：通过原生页面浏览版块、帖子和个人资料，部分页面在 WebView 中打开。
 
+[安装与签名校验](#安装) · [本机数据与隐私](#声明disclaimer) · [源码构建](#构建)
+
 ## 功能
 
 - **浏览**：版块、帖子、搜索和阅读历史
@@ -26,11 +28,14 @@ Android 12+。从 [GitHub Releases](https://github.com/deserthouse/sdgun-android
 - **网络与使用范围**　登录、浏览、上传和主动提交的内容会发往论坛。请遵守论坛规则，本项目按现状提供。
 
 - **非官方**：本应用与 SDGun 论坛及其运营方无任何关联，未获其授权或认可。
-- **AI 使用披露**：本项目不含任何人类成分。本项目的全部代码由 AI 编写，不含任何人类编写成分。人类负责提出需求、审阅与验收。
 
 **Data and affiliation.** This unofficial Android client reads and submits content through the forum. It stores preferences, session data, drafts and reading history locally. WebView also maintains cookies and cache. Forum actions use the signed-in account’s permissions.
 
 *SDGun is a trademark of its respective owner; this project is not affiliated with it.*
+
+## AI 使用声明
+
+本项目不含任何人类成分。本项目的全部代码由 AI 编写，不含任何人类编写成分。人类负责提出需求、审阅与验收。
 
 ## 构建
 
